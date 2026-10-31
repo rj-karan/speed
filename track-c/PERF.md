@@ -5,7 +5,7 @@ Every step from the reference to your final version, each with the live-board ru
 | Step | Change | Run ID | T (s) | M (MB) | Points |
 |---|---|---|---|---|---|
 | 0 | The reference, unchanged | | 14.44 | 367 | 0 |
-| 1 | Replace per-record Python objects with a mapped CSV parser, indexed join, and per-country aggregates | pending board ID | pending | pending | pending |
+| 1 | Replace per-record Python objects with a mapped CSV parser, indexed join, and globally interned names with country membership bits | run-9f1d47d29d62 | 0.906522 | 12.34 | 42.51 |
 
 Local `check.py` passed the official seed-1 full output hash
 `d8088b1cd42ba1338b1345b107b55db7b96ef1f5066f3ff64fd26a8912a0f536`.

@@ -5,7 +5,7 @@ Every step from the reference to your final version, each with the live-board ru
 | Step | Change | Run ID | T (s) | M (MB) | Points |
 |---|---|---|---|---|---|
 | 0 | The reference, unchanged | | 56.35 | 2,200 | 0 |
-| 1 | Query-first posting lists in C++, plus candidate verification for phrases | pending board ID | pending | pending | pending |
+| 1 | Query-first posting lists in C++, plus candidate verification for phrases | run-e6f4196a5413 | 13.192232 | 135.73 | 24.62 |
 
 Local `check.py` passed the official seed-1 full output hash
 `f86973c210228141bcb6f1f1b10188ad2a9b65f71e7cd7cf4590b38de4e80927`.

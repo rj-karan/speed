@@ -5,7 +5,8 @@ Every step from the reference to your final version, each with the live-board ru
 | Step | Change | Run ID | T (s) | M (MB) | Points |
 |---|---|---|---|---|---|
 | 0 | The reference, unchanged | | 72.69 | 893 | 0 |
-| 1 | Use two-pass CSR construction and 64-bit early-exit Dijkstra with stamped distances | pending board ID | pending | pending | pending |
+| 1 | Use forward and reverse CSR for bidirectional 64-bit Dijkstra with stamped distances | run-f48fbd5429aa | 5.264194 | 137.60 | 32.31 |
+| 2 | Process independent queries on six workers with one search state per worker | pending board ID | pending | pending | pending |
 
 Local `check.py` passed the official seed-1 full output hash
 `a23dbdf0a3e49cc8901310a9ee1dc6a9a569a85297b6da75c2a7002cb2ed277e`.
@@ -18,3 +19,7 @@ measure whether the extra reverse graph memory is worth the time saved.
 
 The seed-2 sample generated from the published generator also matched its Python
 reference output hash `70e94813fc6fbee12c22cc040bc4a4629c70508d13eaab2bfabbdd75e1d51aed`.
+
+Six-worker local sandbox run on the full public graph took 3.65 s (previously
+7.13 s) and matched the same official hash. The official board run will measure
+the speed and peak-memory trade-off.

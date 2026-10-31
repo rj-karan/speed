@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <fcntl.h>
@@ -6,6 +7,7 @@
 #include <queue>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -90,31 +92,48 @@ int main() {
     }
     cursor.clear(); cursor.shrink_to_fit();
     reverse_cursor.clear(); reverse_cursor.shrink_to_fit();
-    Search forward(n), backward(n);
-    FILE *out = fopen("/out/distances.txt", "wb");
-    if (!out) return 1;
+    vector<pair<uint32_t, uint32_t>> work;
     p = queries.data;
     const char *end = p + queries.size;
-    uint32_t generation = 0;
     while (p < end) {
         uint32_t source = number(p); ++p;
         uint32_t target = number(p); ++p;
-        int64_t answer = -1;
-        if (source == target) answer = 0;
-        else if (offset[source] != offset[source + 1] &&
-                 reverse_offset[target] != reverse_offset[target + 1]) {
-            ++generation;
-            forward.start(source, generation);
-            backward.start(target, generation);
-            uint64_t best = UINT64_MAX;
-            while (!forward.heap.empty() && !backward.heap.empty()) {
-                uint64_t f = forward.heap.front().first, b = backward.heap.front().first;
-                if (best != UINT64_MAX && f + b >= best) break;
-                if (f <= b) settle(forward, backward, offset, edges, generation, best);
-                else settle(backward, forward, reverse_offset, reverse_edges, generation, best);
+        work.emplace_back(source, target);
+    }
+    vector<int64_t> answers(work.size());
+    atomic<size_t> next_query{0};
+    auto worker = [&]() {
+        Search forward(n), backward(n);
+        uint32_t generation = 0;
+        while (true) {
+            size_t i = next_query.fetch_add(1, memory_order_relaxed);
+            if (i >= work.size()) break;
+            auto [source, target] = work[i];
+            int64_t answer = -1;
+            if (source == target) answer = 0;
+            else if (offset[source] != offset[source + 1] &&
+                     reverse_offset[target] != reverse_offset[target + 1]) {
+                ++generation;
+                forward.start(source, generation);
+                backward.start(target, generation);
+                uint64_t best = UINT64_MAX;
+                while (!forward.heap.empty() && !backward.heap.empty()) {
+                    uint64_t f = forward.heap.front().first, b = backward.heap.front().first;
+                    if (best != UINT64_MAX && f + b >= best) break;
+                    if (f <= b) settle(forward, backward, offset, edges, generation, best);
+                    else settle(backward, forward, reverse_offset, reverse_edges, generation, best);
+                }
+                if (best != UINT64_MAX) answer = static_cast<int64_t>(best);
             }
-            if (best != UINT64_MAX) answer = static_cast<int64_t>(best);
+            answers[i] = answer;
         }
+    };
+    vector<thread> threads;
+    for (int i = 0; i < 6; ++i) threads.emplace_back(worker);
+    for (thread &t : threads) t.join();
+    FILE *out = fopen("/out/distances.txt", "wb");
+    if (!out) return 1;
+    for (int64_t answer : answers) {
         fprintf(out, "%lld\n", static_cast<long long>(answer));
     }
     return fclose(out) != 0;
