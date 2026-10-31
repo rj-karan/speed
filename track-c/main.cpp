@@ -58,26 +58,36 @@ struct Aggregate {
     int32_t amount_min = 0, amount_max = 0;
 };
 
-struct NameState { string_view name; array<uint64_t, 4> countries{}; };
+static inline uint64_t name_hash(string_view name) {
+    uint64_t h = 14695981039346656037ULL;
+    for (unsigned char c : name) h = (h ^ c) * 1099511628211ULL;
+    return h;
+}
+
+struct NameState { string_view name; uint64_t hash; array<uint64_t, 4> countries{}; };
 
 struct NameTable {
     vector<NameState> slots = vector<NameState>(1 << 17);
     size_t count = 0;
-    array<uint64_t, 4> &find_or_insert(string_view name) {
+    // The caller passes the precomputed hash so probing compares hashes first;
+    // a stored-hash mismatch skips the string compare, which would otherwise
+    // dereference the name back into the large read-only CSV mapping every probe.
+    array<uint64_t, 4> &find_or_insert(string_view name, uint64_t hash) {
         if (count * 8 >= slots.size() * 7) {
             vector<NameState> old = move(slots);
             slots = vector<NameState>(old.size() * 2);
             count = 0;
             for (NameState &entry : old) {
-                if (entry.name.data()) find_or_insert(entry.name) = entry.countries;
+                if (entry.name.data()) find_or_insert(entry.name, entry.hash) = entry.countries;
             }
         }
-        size_t index = hash<string_view>{}(name) & (slots.size() - 1);
+        size_t index = hash & (slots.size() - 1);
         while (slots[index].name.data()) {
-            if (slots[index].name == name) return slots[index].countries;
+            if (slots[index].hash == hash && slots[index].name == name) return slots[index].countries;
             index = (index + 1) & (slots.size() - 1);
         }
         slots[index].name = name;
+        slots[index].hash = hash;
         ++count;
         return slots[index].countries;
     }
@@ -154,6 +164,11 @@ int main() {
             ++cursor;
             Field name = read_text(cursor);
             ++cursor;
+            // Hash the name now and prefetch its table slot; the random DRAM miss
+            // then overlaps the note/region/amount parsing and aggregate updates
+            // below, which is where this track spends most of its time.
+            const uint64_t nhash = name_hash(name.raw);
+            __builtin_prefetch(&state.names.slots[nhash & (state.names.slots.size() - 1)]);
             Field note = read_text(cursor);
             ++cursor;
             uint32_t region = read_uint(cursor);
@@ -179,7 +194,7 @@ int main() {
             g.note_bytes += note.bytes;
             // Generated nonempty names are always quoted. Their raw slices uniquely
             // represent the decoded name; quoted and unquoted empty names both use "".
-            auto &flags = state.names.find_or_insert(name.raw);
+            auto &flags = state.names.find_or_insert(name.raw, nhash);
             uint64_t bit = 1ULL << (key & 63);
             uint64_t &word = flags[key >> 6];
             if (!(word & bit)) { word |= bit; ++g.names_distinct; }
@@ -204,7 +219,7 @@ int main() {
         }
         for (const NameState &entry : states[worker].names.slots) {
             if (!entry.name.data()) continue;
-            auto &flags = states[0].names.find_or_insert(entry.name);
+            auto &flags = states[0].names.find_or_insert(entry.name, entry.hash);
             for (size_t word = 0; word < flags.size(); ++word) {
                 uint64_t fresh = entry.countries[word] & ~flags[word];
                 flags[word] |= entry.countries[word];
