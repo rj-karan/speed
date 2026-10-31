@@ -34,3 +34,7 @@ board results from local experiments.
 Profile range discovery, parsing and output separately on the scoring CPU.
 Compare direct mapped output and profile-guided compilation using generator
 output. Keep changes only when the combined time/memory/source coefficient improves.
+
+Output uses anonymous mapped buffers bounded by 224 bytes per populated group
+(the maximum specified row is smaller). Buffers are unmapped after each ordered
+write, avoiding allocator retention alongside the output file's page cache.

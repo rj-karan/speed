@@ -85,9 +85,7 @@ static inline uint32_t latency(const char *&p, const char *end, bool parse) {
     while (*p != '\n') { if (parse) value = value * 10 + (*p - '0'); ++p; }
     ++p; return value;
 }
-static inline void number(string &out, uint64_t n) {
-    char buf[24]; auto end = to_chars(buf, buf + sizeof buf, n).ptr; out.append(buf, end);
-}
+struct Output { char *data = nullptr; size_t capacity = 0, size = 0; };
 static void percentiles(uint32_t *p, size_t n, uint32_t *v) {
     size_t a = (50 * n + 99) / 100 - 1, b = (95 * n + 99) / 100 - 1, c = (99 * n + 99) / 100 - 1;
     if (n <= 32) { sort(p, p + n); v[0] = p[a]; v[1] = p[b]; v[2] = p[c]; return; }
@@ -114,7 +112,7 @@ int main() {
     }
     vector<unique_ptr<Worker>> states;
     for (unsigned i = 0; i < workers; ++i) states.push_back(make_unique<Worker>());
-    vector<string> output(HOURS);
+    vector<Output> output(HOURS);
     atomic<unsigned> next_hour{0};
     barrier sync(workers);
     vector<thread> threads;
@@ -172,21 +170,29 @@ int main() {
             unsigned m = h < 30 ? 10 : 11, d = h < 6 ? 30 : h < 30 ? 31 : h < 54 ? 1 : 2;
             unsigned clock = h < 6 ? h + 18 : h < 30 ? h - 6 : h < 54 ? h - 30 : h - 54;
             snprintf(timestamp, sizeof timestamp, "2026-%02u-%02uT%02u:00:00Z", m, d, clock);
-            string &buf = output[h]; buf.reserve(160000);
+            Output &buf = output[h]; buf.capacity = max(size_t(1), dict.names.size() * 224);
+            buf.data = static_cast<char *>(mmap(nullptr, buf.capacity, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+            if (buf.data == MAP_FAILED) std::exit(1);
+            char *cursor = buf.data;
             for (uint16_t id : order) {
                 uint32_t n = counts[id]; uint64_t error = errors[id];
                 uint32_t values[3]; percentiles(values_by_group.get() + offsets[id], n, values);
                 const Entry &e = dict.names[id];
-                buf.append(timestamp, 20); buf.push_back(' '); buf.append(base + e.offset, e.length);
+                memcpy(cursor, timestamp, 20); cursor += 20; *cursor++ = ' ';
+                memcpy(cursor, base + e.offset, e.length); cursor += e.length;
                 uint64_t fields[] = {n, values[0], values[1], values[2], error, error * 1000000 / n};
-                for (uint64_t value : fields) { buf.push_back(' '); number(buf, value); }
-                buf.push_back('\n');
+                for (uint64_t value : fields) { *cursor++ = ' '; cursor = to_chars(cursor, buf.data + buf.capacity, value).ptr; }
+                *cursor++ = '\n';
             }
+            buf.size = cursor - buf.data;
         }
     });
     for (auto &t : threads) t.join();
     bool ok = true;
-    for (const auto &buf : output) if (fwrite(buf.data(), 1, buf.size(), out) != buf.size()) ok = false;
+    for (auto &buf : output) {
+        if (fwrite(buf.data, 1, buf.size, out) != buf.size) ok = false;
+        if (munmap(buf.data, buf.capacity)) ok = false;
+    }
     if (fclose(out)) ok = false;
     munmap(const_cast<char *>(base), st.st_size);
     return ok ? 0 : 1;

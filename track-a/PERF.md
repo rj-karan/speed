@@ -56,3 +56,19 @@ also verifies 6,000 shuffled requests with injected duplicates, all methods,
 32-bit latency extremes, every decimal length, month/hour boundaries, prefix
 ordering and endpoint lengths at vector boundaries; empty input is checked too.
 The requested 85-point target has not been established by a board run yet.
+
+## Release output buffers as they are written (board confirmation pending)
+
+The hour-local redesign at `d9db9d0` reached 72.787 machine points on the board
+(the run ID will be filled from the public feed). The next iteration changes
+only output storage: bounded, anonymous mapped buffers use the specification's
+maximum row length instead of allocator-owned strings. Each buffer is unmapped
+immediately after its ordered write. This avoids retaining private output pages
+while the kernel accumulates the output file's page cache.
+
+Local peak cgroup memory fell from about 35.3 MB to 24.3 MB. Process runtime stayed
+around 0.038 s on this Ryzen, so the expected benefit is memory, not a speed claim.
+Full public hash, official seed-17 sample, empty input and the shuffled edge-case
+oracle all pass. Batched endpoint prefetch and MAP_POPULATE experiments were
+rejected after they failed to improve local timings. The 85-point target remains
+unmet; other tracks now need work as well.
