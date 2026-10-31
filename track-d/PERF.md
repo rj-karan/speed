@@ -15,3 +15,6 @@ board measurement and is not used as a judging claim.
 Second local experiment: build reverse CSR and search from both ends. The full
 local sandbox check fell to 7.13 s and kept the same output hash. The board will
 measure whether the extra reverse graph memory is worth the time saved.
+
+The seed-2 sample generated from the published generator also matched its Python
+reference output hash `70e94813fc6fbee12c22cc040bc4a4629c70508d13eaab2bfabbdd75e1d51aed`.

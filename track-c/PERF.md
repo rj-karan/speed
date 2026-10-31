@@ -17,3 +17,6 @@ four 64-bit words per name. This replaces millions of per-country set nodes with
 one state per name. The same full local sandbox check fell from 3.87 s to 2.15 s,
 and the output hash stayed identical. The next board run will establish the
 official time and memory effect.
+
+The seed-2 sample generated from the published generator also matched its Python
+reference output hash `f389938275df1b495a38c4375fe741795df180e64617e01e2cf77a95a56982a3`.
