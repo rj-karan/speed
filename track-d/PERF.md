@@ -11,3 +11,7 @@ Local `check.py` passed the official seed-1 full output hash
 `a23dbdf0a3e49cc8901310a9ee1dc6a9a569a85297b6da75c2a7002cb2ed277e`.
 The local Docker check took 8.24 s including container startup; this is not a
 board measurement and is not used as a judging claim.
+
+Second local experiment: build reverse CSR and search from both ends. The full
+local sandbox check fell to 7.13 s and kept the same output hash. The board will
+measure whether the extra reverse graph memory is worth the time saved.
