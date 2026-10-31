@@ -104,3 +104,37 @@ were larger and should not be substituted for this official measurement.
 Offline PGO on newly generated seed-17 sample data was rejected. Five alternating
 full-data runs measured 0.050499 s without it and 0.056448 s with PGO/native
 tuning. All hashes matched, but the candidate was slower.
+
+
+## Bounded SIMD fields and a smaller shared working set (official run pending)
+
+All seven public input files across A–D were rechecked against the authoritative
+SHA256SUMS.json; every input matched. The C candidate passed check.py with the
+published full expected hash. It also matches official generator seed 7 sample,
+seed 17 tiny, and a newly generated full seed 42 against the independent Python
+reference (54ed4d6bd196c17dda213cfcc7b79ec6732f06d80b1b3cb444e7468dd438e517).
+The independent CSV oracle now exercises quotes around 16/32/64-byte boundaries,
+long trailing spaces, lone and edge quotes, and embedded note newlines.
+
+Research motivation: https://github.com/geofflangdale/simdcsv explains SIMD
+quote discovery. This implementation adds its own bounded AVX2 quote search;
+it copies no external parser and adds no dependency. All 32-byte loads remain
+within the input mapping, with bounded memchr handling the tail. Home-slot
+prefetch overlaps the later note/numeric parse. The shared table falls from
+262,144 to 131,072 slots, retaining exact equality and atomic publication. Hash
+values reserve 0 and 1 without forcing a fixed bucket bit. The region lookup
+uses uint8_t entries with 255 missing, valid for the guaranteed 240 countries.
+
+Nine interleaved full-data process runs, six Ryzen cores plus SMT, mean of the
+middle five: confirmed baseline 0.056144 s; final candidate 0.042343 s (24.6%
+less time). Every output hash matched. A separate shell-wrapped peak cgroup
+check measured 24,821,760 -> 13,250,560 bytes; this is local evidence, not the
+scoring host's peak. Other workloads on the local machine add timing noise;
+o official points are inferred from these measurements.
+
+Rejected alternatives: buffering 16 name lookups did not improve on immediate
+lookup plus prefetch. Six and eight parser workers gave 0.054526 and 0.044613 s
+versus 0.042343 s with twelve. Smaller tables and hash changes were also tested
+in isolation; the combined final candidate was selected by its measured time
+and memory. No Rust/C++ boundary or third-party parser is required for these
+operations; the submitted program remains C++ with zero dependencies.

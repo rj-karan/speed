@@ -9,7 +9,9 @@ All four solutions have zero non-standard-library runtime dependencies.
 Docker and Python 3 are required. Each track builds offline from allowlisted,
 digest-pinned images; those base images must already be available locally.
 Place the [official public datasets](https://speeddemon.dev/board/#datasets)
-in `data/a` through `data/d`, then run:
+in `data/a` through `data/d`. Verify every downloaded input against the published
+[SHA256SUMS.json](https://s3.amazonaws.com/raptors.dev/speeddemon.dev/2026/data/SHA256SUMS.json)
+before running the output checks:
 
 ```sh
 python3 check.py a --data data/a --expected 495ca09682b9673ef836a506496177680bb4a3af54255174befddb1f83481cd3

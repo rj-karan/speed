@@ -12,12 +12,16 @@ counts are stored per country. Names are interned once, with a 241-bit country
 membership mask per distinct name. Each table slot caches a 16-byte name prefix and a CSV offset. Name keys refer to raw input slices: generated
 nonempty names are always quoted, so this is a one-to-one representation of the
 unescaped value; quoted and unquoted empty names both have an empty slice.
-An open-addressed table keeps those states contiguous in 262,144 fixed slots
+An open-addressed table keeps those states contiguous in 131,072 fixed slots
 for the specified 100,000-name pool. Exact byte comparisons resolve collisions.
 Up to twelve workers parse record-aligned ranges. A partition boundary follows an LF
 only when the next byte begins an id or boundary BOM; generated note lines start
 with lowercase letters. Workers share the name table; an atomic country-bit claim counts a
 name once per country. Worker numeric aggregates are summed after parsing.
+The region array uses one byte per entry: the guaranteed maximum is 240 country
+indexes, and 255 marks a missing region. AVX2 quote searches load only when all
+32 bytes remain mapped, falling back to bounded memchr near EOF. Hash lookup is
+prefetched while note and numeric fields are parsed.
 Output scans country codes in byte order and writes the unmatched group last.
 
 ## Dependencies

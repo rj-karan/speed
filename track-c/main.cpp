@@ -1,4 +1,5 @@
 #include <array>
+#include <immintrin.h>
 #include <algorithm>
 #include <atomic>
 #include <charconv>
@@ -62,7 +63,13 @@ static inline Field read_text(const char *&p, const char *end) {
     const char *start = p;
     uint32_t escapes = 0;
     while (true) {
-        p = static_cast<const char *>(memchr(p, '"', end - p));
+        while (end - p >= 32) {
+            unsigned mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(
+                _mm256_loadu_si256(reinterpret_cast<const __m256i *>(p)), _mm256_set1_epi8('"')));
+            if (mask) { p += __builtin_ctz(mask); break; }
+            p += 32;
+        }
+        if (end - p < 32) p = static_cast<const char *>(memchr(p, '"', end - p));
         if (p[1] != '"') break;
         p += 2;
         ++escapes;
@@ -92,11 +99,13 @@ static inline uint64_t name_hash(string_view name) {
         for (size_t i = 0; i < n; ++i) first |= uint64_t(static_cast<unsigned char>(name[i])) << (i * 8);
     }
     uint64_t h = first * 0x9e3779b185ebca87ULL ^ last * 0xc2b2ae3d27d4eb4fULL ^ name.size();
-    return ((h ^ (h >> 29)) * 0x165667b19e3779f9ULL) | 2;
+    h = (h ^ (h >> 29)) * 0x165667b19e3779f9ULL;
+    // Preserve all home-bucket bits while reserving 0 and 1 for publication.
+    return h < 2 ? h + 2 : h;
 
 }
 
-constexpr size_t GLOBAL_TABLE_CAP = 1 << 18; // 262,144 slots
+constexpr size_t GLOBAL_TABLE_CAP = 1 << 17; // 131,072 slots for the specified 100,000-name pool.
 constexpr size_t GLOBAL_TABLE_MASK = GLOBAL_TABLE_CAP - 1;
 
 struct alignas(64) GlobalSlot {
@@ -128,7 +137,8 @@ int main() {
     if (!lookup.data || !records.data) return 1;
 
     constexpr uint16_t no_country = 65535;
-    vector<uint16_t> regions(1000000, no_country);
+    // At most 240 country indexes; 255 marks a missing region.
+    vector<uint8_t> regions(1000000, 255);
     vector<uint16_t> code_to_index(26 * 26 * 26, no_country), country_codes;
     const char *p = lookup.data, *end = p + lookup.size;
     while (p < end && *p++ != '\n') {} // Header.
@@ -177,6 +187,8 @@ int main() {
             ++cursor;
             Field name = read_text(cursor, end);
             ++cursor;
+            const uint64_t nhash = name_hash(name.raw);
+            __builtin_prefetch(&global_table[nhash & GLOBAL_TABLE_MASK], 1, 3);
             Field note = read_text(cursor, end);
             ++cursor;
             uint32_t region = read_record_uint(cursor, end);
@@ -191,8 +203,8 @@ int main() {
             if (cursor < end && *cursor == '\r') ++cursor;
             if (cursor < end && *cursor == '\n') ++cursor;
 
-            uint16_t key = region < regions.size() ? regions[region] : no_country;
-            if (key == no_country) key = unmatched;
+            uint16_t key = region < regions.size() ? regions[region] : 255;
+            if (key == 255) key = unmatched;
             Aggregate &g = local_groups[key];
             if (!g.count || cents < g.amount_min) g.amount_min = cents;
             if (!g.count || cents > g.amount_max) g.amount_max = cents;
@@ -202,7 +214,6 @@ int main() {
             g.name_bytes += name.bytes;
             g.note_bytes += note.bytes;
 
-            const uint64_t nhash = name_hash(name.raw);
             size_t idx = nhash & GLOBAL_TABLE_MASK;
 
             GlobalSlot *slot = nullptr;

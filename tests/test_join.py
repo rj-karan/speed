@@ -11,7 +11,11 @@ class JoinCorrectness(unittest.TestCase):
         rng = random.Random(31)
         names = ['', 'Betts', 'Betts ', 'Ann "Annie" Lee', 'Kaphar, Titus',
                  'abcdefghijklmnopAAAAAAAAqrstuvwx', 'abcdefghijklmnopBBBBBBBBqrstuvwx']
+        names += ['A' * n + '"B' for n in [14, 15, 16, 29, 30, 31, 32, 61, 62, 63, 64]]
+        names += ['Long name' + ' ' * 80]
         notes = ['', 'one\ntwo\nthree', 'comma, quote " together\nand a newline', 'trailing ']
+        notes += ['"', '"no"', 'a' * 31 + '"' + 'b' * 32 + '"\nlast',
+                  'a' * 63 + '"', '"' + 'a' * 64]
         regions = {1: 'AAA', 23: 'BBB', 456: 'CCC', 7890: 'DDD', 12345: 'AAA',
                    123456: 'BBB', 999999: 'CCC'}
         money_values = [-99999, -5, -1, 0, 1, 99, 100, 9999999]
