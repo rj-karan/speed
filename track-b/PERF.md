@@ -90,3 +90,21 @@ official seed-17 tiny matches its reference
 A separate byte-regex oracle checks 2,500 mixed queries, repeated terms, absent
 terms, token prefixes, 32-byte terms, uppercase, punctuation and non-ASCII bytes
 with the actual sandboxed image (`python3 -m unittest discover -s tests -v`).
+
+## Exact hybrid storage (official board confirmation pending)
+
+Replace per-worker growing posting vectors and serial merging with two corpus
+passes: count distinct document occurrences, allocate exact sparse postings or
+bitmaps by the smaller byte cost, then fill disjoint worker ranges. Boolean
+scratch uses word operations for common terms and sparse updates for rare terms.
+A bounded SIMD tokenizer and packed hash remove per-character hash multiplication;
+all hash matches retain exact byte validation.
+
+Five alternating local process runs, prewarmed seed-1 full data, six physical
+Ryzen cores plus SMT and the official timer: old middle-three mean 0.649946 s;
+new 0.586214 s (9.8% reduction). Local peak cgroup memory with a shell wrapper
+was 92,078,080 bytes versus about 270 MB previously. These are local results,
+not official scores. Source-size cost still needs board confirmation.
+
+Public full hash, official seed-2 sample, official seed-17 tiny reference, and the
+2,500-query independent byte-regex oracle all pass.

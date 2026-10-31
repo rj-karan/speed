@@ -27,3 +27,26 @@ Six-worker local sandbox run on the full public graph took 3.65 s (previously
 the speed and peak-memory trade-off.
 The board confirmed 1.707945 s and 348.94 MB for run-c2344a47e783. The extra
 memory cost was outweighed by the faster run: K rose from 4.43 to 6.33.
+
+## Radix heap and CSR sentinel fix (board confirmation pending)
+
+Profiling the old implementation locally found graph construction around 311 ms
+and query evaluation around 1,499 ms. Replace the comparison heap with a monotone
+65-bucket radix heap. Keep four workers and full-node generation-stamped distance
+arrays. Correct the CSR cursor sentinel loop's out-of-bounds read (u < n).
+Path sums remain uint64 and results retain signed -1 for unreachable.
+
+Five alternating local full-data process runs measured previous middle-three mean
+2.110186 s and radix-only 1.401386 s. Background-machine variance was substantial:
+previous runs ranged 1.878–2.278 s and new runs 1.255–1.558 s. The ranges did not
+overlap, but the board must confirm the actual gain; these are not official scores.
+
+An eight-worker sparse-state experiment also passed correctness and measured
+1.850205 → 1.037898 s in an earlier local A/B batch. It was rejected before
+submission: its cgroup peak was 545,898,496 bytes, roughly twice the previous
+peak, so the time win did not justify memory and extra source-size costs.
+
+The submitted radix-only version passes the full public hash, official seed-17
+tiny reference, and 1,150 independent heapq-oracle queries, including duplicate,
+parallel and zero-weight edges, isolated nodes and sums exceeding uint32.
+Official run ID and K remain pending.

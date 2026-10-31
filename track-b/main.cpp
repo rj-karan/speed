@@ -3,6 +3,7 @@
 #include <thread>
 #include <charconv>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <fcntl.h>
 #include <immintrin.h>
@@ -56,9 +57,25 @@ struct Slot { uint64_t hash = 0; uint32_t id = UINT32_MAX; };
 struct Terms { vector<Slot> slots; vector<string_view> names; size_t mask; };
 
 static uint64_t hash_term(string_view term) {
-    uint64_t hash = 14695981039346656037ULL;
-    for (unsigned char c : term) hash = (hash ^ c) * 1099511628211ULL;
-    return hash;
+    // Tokens contain only ASCII letters/digits. OR 0x20 folds letters and leaves
+    // digits unchanged. Length and exact equality distinguish padded values.
+    uint64_t first = 0, last = 0;
+    size_t n = term.size();
+    if (n >= 8) {
+        memcpy(&first, term.data(), 8);
+        memcpy(&last, term.data() + n - 8, 8);
+    } else if (n >= 4) {
+        uint32_t a, b;
+        memcpy(&a, term.data(), 4);
+        memcpy(&b, term.data() + n - 4, 4);
+        first = a; last = b;
+    } else {
+        for (size_t i = 0; i < n; ++i) first |= uint64_t(static_cast<unsigned char>(term[i])) << (i * 8);
+    }
+    first |= 0x2020202020202020ULL;
+    last |= 0x2020202020202020ULL;
+    uint64_t h = first * 0x9e3779b185ebca87ULL ^ last * 0xc2b2ae3d27d4eb4fULL ^ term.size();
+    return (h ^ (h >> 29)) * 0x165667b19e3779f9ULL;
 }
 static Terms make_terms(const unordered_map<string_view, uint32_t> &ids) {
     Terms table;
@@ -76,88 +93,37 @@ static Terms make_terms(const unordered_map<string_view, uint32_t> &ids) {
     }
     return table;
 }
+static bool equal_term(const char *p, string_view word);
 static uint32_t token(const char *&p, const char *end, const Terms &terms) {
-    // The spec tokenizes ASCII bytes only; every UTF-8 byte is a separator.
-    while (p < end && !((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9'))) ++p;
+    auto alnum = [](unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'); };
+    while (p < end && !alnum(*p)) ++p;
     if (p == end) return UINT32_MAX;
     const char *start = p;
-    uint64_t hash = 14695981039346656037ULL;
-    while (p < end && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9'))) {
-        unsigned char c = *p++;
-        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
-        hash = (hash ^ c) * 1099511628211ULL;
+    while (end - p >= 16) {
+        __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i *>(p));
+        __m128i folded = _mm_or_si128(bytes, _mm_set1_epi8(0x20));
+        __m128i letters = _mm_and_si128(_mm_cmpgt_epi8(folded, _mm_set1_epi8('a' - 1)), _mm_cmpgt_epi8(_mm_set1_epi8('z' + 1), folded));
+        __m128i digits = _mm_and_si128(_mm_cmpgt_epi8(bytes, _mm_set1_epi8('0' - 1)), _mm_cmpgt_epi8(_mm_set1_epi8('9' + 1), bytes));
+        unsigned stops = (~unsigned(_mm_movemask_epi8(_mm_or_si128(letters, digits)))) & 65535;
+        if (stops) { p += __builtin_ctz(stops); break; }
+        p += 16;
     }
+    while (p < end && alnum(*p)) ++p;
+    string_view word(start, p - start);
+    uint64_t hash = hash_term(word);
     size_t index = hash & terms.mask;
     while (terms.slots[index].id != UINT32_MAX) {
         const Slot &slot = terms.slots[index];
         if (slot.hash == hash) {
-            string_view name = terms.names[slot.id];
-            if (name.size() == size_t(p - start)) {
-                size_t i = 0;
-                while (i < name.size()) {
-                    unsigned char c = start[i];
-                    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
-                    if (c != name[i]) break;
-                    ++i;
-                }
-                if (i == name.size()) return slot.id;
-            }
+            string_view want = terms.names[slot.id];
+            if (want.size() == word.size() && equal_term(start, want)) return slot.id;
         }
         index = (index + 1) & terms.mask;
     }
     return UINT32_MAX - 1;
 }
 
-static vector<uint32_t> intersect(const vector<uint32_t> &a, const vector<uint32_t> &b) {
-    vector<uint32_t> result; result.reserve(min(a.size(), b.size()));
-    // Sparse-vs-common terms should not scan a whole common posting list.
-    const auto &small = a.size() < b.size() ? a : b;
-    const auto &large = a.size() < b.size() ? b : a;
-    if (small.size() * 32 < large.size()) {
-        auto pos = large.begin();
-        for (uint32_t doc : small) {
-            pos = lower_bound(pos, large.end(), doc);
-            if (pos == large.end()) break;
-            if (*pos == doc) result.push_back(doc);
-        }
-        return result;
-    }
-    size_t i = 0, j = 0;
-    while (i < a.size() && j < b.size()) {
-        if (a[i] < b[j]) ++i;
-        else if (a[i] > b[j]) ++j;
-        else { result.push_back(a[i]); ++i; ++j; }
-    }
-    return result;
-}
-static vector<uint32_t> unite(const vector<uint32_t> &a, const vector<uint32_t> &b) {
-    vector<uint32_t> result; result.reserve(a.size() + b.size());
-    size_t i = 0, j = 0;
-    while (i < a.size() || j < b.size()) {
-        if (j == b.size() || (i < a.size() && a[i] < b[j])) result.push_back(a[i++]);
-        else if (i == a.size() || b[j] < a[i]) result.push_back(b[j++]);
-        else { result.push_back(a[i]); ++i; ++j; }
-    }
-    return result;
-}
-static vector<uint32_t> subtract(const vector<uint32_t> &a, const vector<uint32_t> &b) {
-    vector<uint32_t> result; result.reserve(a.size());
-    if (a.size() * 32 < b.size()) {
-        auto pos = b.begin();
-        for (uint32_t doc : a) {
-            pos = lower_bound(pos, b.end(), doc);
-            if (pos == b.end() || *pos != doc) result.push_back(doc);
-        }
-        return result;
-    }
-    size_t i = 0, j = 0;
-    while (i < a.size()) {
-        while (j < b.size() && b[j] < a[i]) ++j;
-        if (j == b.size() || a[i] != b[j]) result.push_back(a[i]);
-        ++i;
-    }
-    return result;
-}
+struct Posting { size_t offset = 0; uint32_t count = 0; bool dense = false; };
 
 static bool is_token_byte(unsigned char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
@@ -228,7 +194,6 @@ int main() {
     queries.reserve(50000);
     parse_queries(query_file, ids, queries);
     Terms terms = make_terms(ids);
-    vector<vector<uint32_t>> postings(terms.names.size());
     ids.clear(); ids.rehash(0);
     vector<string_view> docs;
     docs.reserve(250000);
@@ -245,80 +210,111 @@ int main() {
     size_t workers = thread::hardware_concurrency();
     if (!workers) workers = 1;
     if (workers > 12) workers = 12;
-    vector<vector<vector<uint32_t>>> parts(workers);
-    vector<thread> build_threads;
-    for (size_t worker = 0; worker < workers; ++worker) {
-        build_threads.emplace_back([&, worker] {
-            auto &local = parts[worker];
-            local.resize(terms.names.size());
-            vector<uint32_t> last_doc(terms.names.size(), UINT32_MAX);
-            size_t begin = docs.size() * worker / workers;
-            size_t finish = docs.size() * (worker + 1) / workers;
-            for (size_t doc_id = begin; doc_id < finish; ++doc_id) {
-                const char *t = docs[doc_id].data();
-                const char *doc_end = t + docs[doc_id].size();
-                while (t < doc_end) {
-                    uint32_t id = token(t, doc_end, terms);
-                    if (id == UINT32_MAX) break;
-                    if (id != UINT32_MAX - 1 && last_doc[id] != doc_id) {
-                        last_doc[id] = doc_id;
-                        local[id].push_back(doc_id);
-                    }
-                }
+    const size_t words = (docs.size() + 63) / 64, term_count = terms.names.size();
+    vector<vector<uint32_t>> counts(workers, vector<uint32_t>(term_count));
+    vector<Posting> postings(term_count);
+    vector<uint32_t> sparse;
+    vector<uint64_t> dense;
+    auto scan = [&](size_t worker, bool write) {
+        // Word-aligned document ranges make bitmap writes disjoint, so the
+        // second pass needs no atomics, including for very frequent terms.
+        size_t begin = (docs.size() * worker / workers) & ~size_t(63);
+        size_t finish = worker + 1 == workers ? docs.size() : (docs.size() * (worker + 1) / workers) & ~size_t(63);
+        vector<uint32_t> last_doc(term_count, UINT32_MAX);
+        auto &positions = counts[worker];
+        for (size_t doc = begin; doc < finish; ++doc) {
+            const char *t = docs[doc].data(), *doc_end = t + docs[doc].size();
+            while (t < doc_end) {
+                uint32_t id = token(t, doc_end, terms);
+                if (id >= term_count || last_doc[id] == doc) continue;
+                last_doc[id] = doc;
+                if (!write) ++positions[id];
+                else if (postings[id].dense) dense[postings[id].offset + doc / 64] |= uint64_t(1) << (doc & 63);
+                else sparse[positions[id]++] = doc;
             }
-        });
+        }
+    };
+    auto pass = [&](bool write) {
+        vector<thread> threads;
+        for (size_t w = 0; w < workers; ++w) threads.emplace_back(scan, w, write);
+        for (auto &t : threads) t.join();
+    };
+    pass(false);
+    size_t sparse_size = 0, dense_size = 0;
+    for (size_t id = 0; id < term_count; ++id) {
+        auto &list = postings[id];
+        for (auto &part : counts) list.count += part[id];
+        list.dense = size_t(list.count) * 4 > words * 8;
+        if (list.dense) { list.offset = dense_size; dense_size += words; }
+        else {
+            list.offset = sparse_size;
+            for (auto &part : counts) { uint32_t n = part[id]; part[id] = sparse_size; sparse_size += n; }
+        }
     }
-    for (thread &t : build_threads) t.join();
-    for (size_t id = 0; id < postings.size(); ++id) {
-        // Worker ranges are disjoint and ordered by document id, so concatenation
-        // retains sorted postings without a merge sort.
-        size_t size = 0;
-        for (const auto &part : parts) size += part[id].size();
-        postings[id].reserve(size);
-        for (const auto &part : parts)
-            postings[id].insert(postings[id].end(), part[id].begin(), part[id].end());
-    }
-    parts.clear(); parts.shrink_to_fit();
+    sparse.resize(sparse_size); dense.resize(dense_size);
+    pass(true);
+    counts.clear(); counts.shrink_to_fit();
+    auto visit = [&](uint32_t id, auto consume) {
+        const auto &list = postings[id];
+        if (list.dense) {
+            for (size_t j = 0; j < words; ++j) {
+                uint64_t bits = dense[list.offset + j];
+                while (bits) { unsigned bit = __builtin_ctzll(bits); consume(uint32_t(j * 64 + bit)); bits &= bits - 1; }
+            }
+        } else for (size_t j = 0; j < list.count; ++j) consume(sparse[list.offset + j]);
+    };
     vector<string> output(queries.size());
     atomic<size_t> next_query{0};
     auto query_worker = [&]() {
+        vector<uint64_t> result(words), scratch(words);
         while (true) {
             size_t query_id = next_query.fetch_add(1, memory_order_relaxed);
             if (query_id >= queries.size()) break;
             const Query &q = queries[query_id];
-            vector<uint32_t> result;
+            fill(result.begin(), result.end(), 0);
             if (q.phrase) {
                 size_t anchor = 0;
                 for (size_t j = 1; j < q.terms.size(); ++j)
-                    if (postings[q.terms[j]].size() < postings[q.terms[anchor]].size()) anchor = j;
-                uint32_t rarest = q.terms[anchor];
-                for (uint32_t doc : postings[rarest]) {
-                    bool candidate = true;
-                    for (uint32_t id : q.terms) {
-                        if (!binary_search(postings[id].begin(), postings[id].end(), doc)) { candidate = false; break; }
-                    }
-                    if (candidate && contains_phrase(docs[doc], q, terms, anchor)) result.push_back(doc);
-                }
+                    if (postings[q.terms[j]].count < postings[q.terms[anchor]].count) anchor = j;
+                visit(q.terms[anchor], [&](uint32_t doc) {
+                    if (contains_phrase(docs[doc], q, terms, anchor)) result[doc / 64] |= uint64_t(1) << (doc & 63);
+                });
             } else {
-                result = postings[q.terms[0]];
-                // Boolean operators are strictly left-associative, even OR then AND.
+                visit(q.terms[0], [&](uint32_t doc) { result[doc / 64] |= uint64_t(1) << (doc & 63); });
                 for (size_t i = 0; i < q.ops.size(); ++i) {
                     const auto &next = postings[q.terms[i + 1]];
-                    if (q.ops[i] == 'A') result = intersect(result, next);
-                    else if (q.ops[i] == 'O') result = unite(result, next);
-                    else result = subtract(result, next);
+                    char op = q.ops[i];
+                    if (next.dense) {
+                        const uint64_t *bits = dense.data() + next.offset;
+                        if (op == 'A') for (size_t j = 0; j < words; ++j) result[j] &= bits[j];
+                        else if (op == 'O') for (size_t j = 0; j < words; ++j) result[j] |= bits[j];
+                        else for (size_t j = 0; j < words; ++j) result[j] &= ~bits[j];
+                    } else if (op == 'A') {
+                        fill(scratch.begin(), scratch.end(), 0);
+                        visit(q.terms[i + 1], [&](uint32_t doc) { scratch[doc / 64] |= result[doc / 64] & (uint64_t(1) << (doc & 63)); });
+                        result.swap(scratch);
+                    } else {
+                        visit(q.terms[i + 1], [&](uint32_t doc) {
+                            uint64_t bit = uint64_t(1) << (doc & 63);
+                            if (op == 'O') result[doc / 64] |= bit;
+                            else result[doc / 64] &= ~bit;
+                        });
+                    }
                 }
             }
-            uint64_t sum = 0;
-            for (uint32_t doc : result) sum += doc;
-            string &line = output[query_id];
-            append_number(line, result.size());
-            line.push_back(' ');
-            append_number(line, sum);
-            for (size_t i = 0; i < min(size_t(10), result.size()); ++i) {
-                line.push_back(' ');
-                append_number(line, result[i]);
+            uint64_t sum = 0, count = 0;
+            uint32_t first[10];
+            for (size_t j = 0; j < words; ++j) {
+                uint64_t bits = result[j];
+                while (bits) {
+                    uint32_t doc = j * 64 + __builtin_ctzll(bits);
+                    if (count < 10) first[count] = doc;
+                    ++count; sum += doc; bits &= bits - 1;
+                }
             }
+            string &line = output[query_id];
+            append_number(line, count); line.push_back(' '); append_number(line, sum);
+            for (size_t i = 0; i < min(uint64_t(10), count); ++i) { line.push_back(' '); append_number(line, first[i]); }
             line.push_back('\n');
         }
     };

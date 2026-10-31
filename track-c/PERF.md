@@ -54,3 +54,21 @@ removes the serial name-merge phase. The board measured peak cgroup memory of
 
 The seed-2 sample generated from the published generator also matched its Python
 reference output hash `f389938275df1b495a38c4375fe741795df180e64617e01e2cf77a95a56982a3`.
+
+## Inline name prefixes and vectorized quote search (board confirmation pending)
+
+Each 64-byte name slot now stores a 16-byte prefix and a 32-bit CSV offset.
+Short-name equality stays in the table's cache line; long names still compare
+all remaining bytes in the mapping. A packed hash replaces the per-byte FNV
+chain, retaining exact collision checks. Hash values 0 and 1 explicitly represent
+free and publishing slots, with release/acquire publication. Quoted fields find
+quotes using bounded memchr, retaining escape and embedded-newline semantics.
+
+Five alternating local process runs on the full public data: previous
+middle-three mean 0.066621 s; new 0.041007 s (38.4% reduction). The full public
+hash and official seed-17 tiny reference hash match. This is local timing;
+no official score is claimed yet, and peak memory/source cost must be weighed
+in the board result.
+
+An additional official seed-7 sample reference also matches:
+`4a8b5533b3639d52e4bb82e622c0a03c071e3e4f7ea62c42fcb716d373602958`.

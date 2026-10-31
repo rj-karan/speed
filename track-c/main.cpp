@@ -35,7 +35,7 @@ static inline uint32_t read_uint(const char *&p) {
 }
 
 struct Field { string_view raw; uint32_t bytes; };
-static inline Field read_text(const char *&p) {
+static inline Field read_text(const char *&p, const char *end) {
     if (*p != '"') {
         const char *start = p;
         while (*p != ',') ++p;
@@ -45,7 +45,7 @@ static inline Field read_text(const char *&p) {
     const char *start = p;
     uint32_t escapes = 0;
     while (true) {
-        if (*p != '"') { ++p; continue; }
+        p = static_cast<const char *>(memchr(p, '"', end - p));
         if (p[1] != '"') break;
         p += 2;
         ++escapes;
@@ -61,19 +61,31 @@ struct Aggregate {
 };
 
 static inline uint64_t name_hash(string_view name) {
-    uint64_t h = 14695981039346656037ULL;
-    for (unsigned char c : name) h = (h ^ c) * 1099511628211ULL;
-    return h;
+    uint64_t first = 0, last = 0;
+    size_t n = name.size();
+    if (n >= 8) {
+        memcpy(&first, name.data(), 8);
+        memcpy(&last, name.data() + n - 8, 8);
+    } else if (n >= 4) {
+        uint32_t a, b;
+        memcpy(&a, name.data(), 4);
+        memcpy(&b, name.data() + n - 4, 4);
+        first = a; last = b;
+    } else {
+        for (size_t i = 0; i < n; ++i) first |= uint64_t(static_cast<unsigned char>(name[i])) << (i * 8);
+    }
+    uint64_t h = first * 0x9e3779b185ebca87ULL ^ last * 0xc2b2ae3d27d4eb4fULL ^ name.size();
+    return ((h ^ (h >> 29)) * 0x165667b19e3779f9ULL) | 2;
+
 }
 
 constexpr size_t GLOBAL_TABLE_CAP = 1 << 18; // 262,144 slots
 constexpr size_t GLOBAL_TABLE_MASK = GLOBAL_TABLE_CAP - 1;
 
 struct alignas(64) GlobalSlot {
-    atomic<uint64_t> hash{0};
-    const char *name_ptr{nullptr};
-    uint32_t name_len{0};
-    atomic<bool> ready{false};
+    atomic<uint64_t> hash{0}; // 0: free, 1: publishing, >=2: published hash.
+    uint32_t name_offset{0}, name_len{0};
+    char prefix[16]{}; // Compare short names without revisiting the CSV mapping.
     atomic<uint64_t> countries[4]{};
 };
 
@@ -146,9 +158,9 @@ int main() {
             if (end - cursor >= 3 && (unsigned char)cursor[0] == 0xEF && (unsigned char)cursor[1] == 0xBB && (unsigned char)cursor[2] == 0xBF) cursor += 3;
             uint32_t id = read_uint(cursor);
             ++cursor;
-            Field name = read_text(cursor);
+            Field name = read_text(cursor, end);
             ++cursor;
-            Field note = read_text(cursor);
+            Field note = read_text(cursor, end);
             ++cursor;
             uint32_t region = read_uint(cursor);
             ++cursor;
@@ -179,23 +191,25 @@ int main() {
             GlobalSlot *slot = nullptr;
             while (true) {
                 GlobalSlot &s = global_table[idx];
-                uint64_t cur_h = s.hash.load(memory_order_relaxed);
+                uint64_t cur_h = s.hash.load(memory_order_acquire);
+                while (cur_h == 1) { __builtin_ia32_pause(); cur_h = s.hash.load(memory_order_acquire); }
                 if (cur_h == 0) {
                     uint64_t expected = 0;
-                    if (s.hash.compare_exchange_strong(expected, nhash, memory_order_acq_rel, memory_order_relaxed)) {
-                        s.name_ptr = name.raw.data();
+                    if (s.hash.compare_exchange_strong(expected, 1, memory_order_acq_rel, memory_order_relaxed)) {
+                        s.name_offset = name.raw.data() - records.data;
+                        memcpy(s.prefix, name.raw.data(), min(name.raw.size(), size_t(16)));
                         s.name_len = name.raw.size();
-                        s.ready.store(true, memory_order_release);
+                        s.hash.store(nhash, memory_order_release);
                         slot = &s;
                         break;
                     }
-                    cur_h = s.hash.load(memory_order_relaxed);
+                    cur_h = s.hash.load(memory_order_acquire);
+                    while (cur_h == 1) { __builtin_ia32_pause(); cur_h = s.hash.load(memory_order_acquire); }
                 }
                 if (cur_h == nhash) {
-                    while (!s.ready.load(memory_order_acquire)) {
-                        __builtin_ia32_pause();
-                    }
-                    if (s.name_len == name.raw.size() && memcmp(s.name_ptr, name.raw.data(), s.name_len) == 0) {
+                    if (s.name_len == name.raw.size() &&
+                        memcmp(s.prefix, name.raw.data(), min(size_t(s.name_len), size_t(16))) == 0 &&
+                        (s.name_len <= 16 || memcmp(records.data + s.name_offset + 16, name.raw.data() + 16, s.name_len - 16) == 0)) {
                         slot = &s;
                         break;
                     }

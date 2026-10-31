@@ -1,24 +1,30 @@
-# Track D: Traverse
+# Track D: sparse bidirectional Dijkstra
 
-The task, the input files and the exact output format are in the [spec](https://github.com/hackathon-raptors/speed-demon-2026/blob/main/specs/d-traverse.md).
+Parse the graph into forward and reverse CSR arrays using four workers. Each
+query uses exact 64-bit bidirectional Dijkstra, stopping when the two frontier
+bounds meet the best discovered route. Preserve zero-weight, duplicate,
+parallel and directed edges. Reject impossible endpoints early, and answer
+identical endpoints with zero. No heuristic changes path lengths.
 
-## Approach
+Each frontier uses a 65-bucket integer radix heap. Nonnegative weights guarantee
+monotone extracted costs; redistributing a bucket moves its items into lower
+buckets. Exact stale-entry checks remain in place. Full-node distance arrays use
+generation stamps to avoid clearing between queries. Four workers answer
+independent queries, and output is written in input order. Generation wrap
+clears stamps explicitly. The CSR cursor loop also stops at u < n, avoiding an
+out-of-bounds degree read at the sentinel.
 
-The C++ program memory maps the graph and parses it twice. The first pass counts
-outgoing edges; the second fills a compact CSR adjacency array without retaining
-a second copy of the edges. Each query runs an early-exit Dijkstra search with
-64-bit distances and generation-stamped state, so clearing all node distances per
-query is unnecessary. A reverse CSR index allows the searches to proceed from
-both ends until their frontier bounds meet. Four workers process independent queries
-and write answers by query index. Zero-weight, parallel, duplicate, and
-directed edges are kept exactly. Nodes with no outgoing edges and targets with no
-incoming edges are rejected early, while identical source and target returns zero.
+An eight-worker sparse-state experiment was rejected: although faster, peak
+memory rose to roughly 546 MB locally, which hurt the combined coefficient.
 
-## Dependencies
+## Dependencies and validation
 
-None.
+No non-standard-library runtime dependencies (D = 1). The full public output,
+official seed-17 tiny reference, and an independent heapq oracle covering
+unreachable, repeated, zero-weight and >32-bit distances match.
 
 ## With another 24 hours
 
-Profile heap operations and test a radix heap on the published generator's query
-distribution, including unreachable cases.
+Measure compact edge encoding and radix-bucket allocation on the scoring CPU.
+Keep exact fallback storage for unusually large weights and compare total
+preprocessing cost, search time and kernel peak memory.

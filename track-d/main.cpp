@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <atomic>
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <fcntl.h>
@@ -30,45 +32,34 @@ static inline uint32_t fast_uint(const char *&p) {
 
 struct Edge { uint32_t to, weight; };
 
-struct QuadHeap {
+struct RadixHeap {
     struct Item { uint64_t cost; uint32_t node; };
-    vector<Item> data;
-    QuadHeap() { data.reserve(8192); }
-    inline void clear() { data.clear(); }
-    inline bool empty() const { return data.empty(); }
-    inline Item top() const { return data[0]; }
-    inline void push(uint64_t cost, uint32_t node) {
-        size_t idx = data.size();
-        data.push_back({cost, node});
-        while (idx > 0) {
-            size_t parent = (idx - 1) >> 2;
-            if (data[idx].cost < data[parent].cost) { swap(data[idx], data[parent]); idx = parent; }
-            else break;
-        }
+    array<vector<Item>, 65> buckets;
+    uint64_t last = 0;
+    size_t count = 0;
+    void clear() { for (auto &b : buckets) b.clear(); count = 0; last = 0; }
+    bool empty() const { return count == 0; }
+    void push(uint64_t cost, uint32_t node) {
+        buckets[bit_width(cost ^ last)].push_back({cost, node}); ++count;
     }
-    inline Item pop() {
-        Item res = data[0], last = data.back();
-        data.pop_back();
-        if (!data.empty()) {
-            data[0] = last;
-            size_t idx = 0, len = data.size();
-            while (true) {
-                size_t child = (idx << 2) + 1;
-                if (child >= len) break;
-                size_t best = child, last_child = min(child + 4, len);
-                for (size_t c = child + 1; c < last_child; ++c) if (data[c].cost < data[best].cost) best = c;
-                if (data[best].cost < data[idx].cost) { swap(data[idx], data[best]); idx = best; }
-                else break;
-            }
-        }
-        return res;
+    // Nonnegative edge weights make the extracted costs monotone.
+    void prepare() {
+        if (!buckets[0].empty()) return;
+        size_t i = 1; while (buckets[i].empty()) ++i;
+        uint64_t next = UINT64_MAX;
+        for (const auto &x : buckets[i]) next = min(next, x.cost);
+        last = next;
+        for (const auto &x : buckets[i]) buckets[bit_width(x.cost ^ last)].push_back(x);
+        buckets[i].clear();
     }
+    Item top() { prepare(); return buckets[0].back(); }
+    Item pop() { prepare(); Item x = buckets[0].back(); buckets[0].pop_back(); --count; return x; }
 };
 
 struct Search {
     vector<uint64_t> distance;
     vector<uint16_t> seen;
-    QuadHeap heap;
+    RadixHeap heap;
     Search(uint32_t n) : distance(n), seen(n, 0) {}
     inline void start(uint32_t node, uint16_t generation) {
         heap.clear(); distance[node] = 0; seen[node] = generation; heap.push(0, node);
@@ -146,7 +137,7 @@ int main() {
 
     vector<vector<uint32_t>> cursor(NTHREADS, vector<uint32_t>(n + 1, 0));
     vector<vector<uint32_t>> rcursor(NTHREADS, vector<uint32_t>(n + 1, 0));
-    for (uint32_t u = 0; u <= n; ++u) {
+    for (uint32_t u = 0; u < n; ++u) {
         uint32_t c = offset[u], rc = reverse_offset[u];
         for (int t = 0; t < NTHREADS; ++t) {
             cursor[t][u] = c; rcursor[t][u] = rc;

@@ -9,7 +9,7 @@ an indexed array and parses records in one pass. The parser skips BOMs only at
 record boundaries; it treats quoted newlines as data and counts escaped quotes
 as one byte. Amounts remain exact integer cents. Aggregates and distinct-name
 counts are stored per country. Names are interned once, with a 241-bit country
-membership mask per distinct name. Name keys refer to raw input slices: generated
+membership mask per distinct name. Each table slot caches a 16-byte name prefix and a CSV offset. Name keys refer to raw input slices: generated
 nonempty names are always quoted, so this is a one-to-one representation of the
 unescaped value; quoted and unquoted empty names both have an empty slice.
 An open-addressed table keeps those states contiguous in 262,144 fixed slots

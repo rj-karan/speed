@@ -34,7 +34,7 @@ seed-17 sample comparison against the official reference verify the restoration.
 Steps 2 and 3 cite the same run: they are not independent measured improvements.
 Only their combined measured state is supported by that run ID.
 
-## Hour-local C++ redesign (October 31; board confirmation pending)
+## Hour-local C++ redesign (October 31; run-23861fe20fc1)
 
 Focus is Track A only; other track implementations are unchanged. Rejected local
 prototypes included a two-pass dictionary/cursor rewrite (slower than the existing
@@ -57,10 +57,10 @@ also verifies 6,000 shuffled requests with injected duplicates, all methods,
 ordering and endpoint lengths at vector boundaries; empty input is checked too.
 The requested 85-point target has not been established by a board run yet.
 
-## Release output buffers as they are written (board confirmation pending)
+## Release output buffers as they are written (run-26990cc808b6)
 
 The hour-local redesign at `d9db9d0` reached 72.787 machine points on the board
-(the run ID will be filled from the public feed). The next iteration changes
+(run-23861fe20fc1). The next iteration changes
 only output storage: bounded, anonymous mapped buffers use the specification's
 maximum row length instead of allocator-owned strings. Each buffer is unmapped
 immediately after its ordered write. This avoids retaining private output pages
@@ -72,3 +72,7 @@ Full public hash, official seed-17 sample, empty input and the shuffled edge-cas
 oracle all pass. Batched endpoint prefetch and MAP_POPULATE experiments were
 rejected after they failed to improve local timings. The 85-point target remains
 unmet; other tracks now need work as well.
+
+Official confirmation for `c4baf88`: `run-26990cc808b6` passed every gate,
+measuring 0.047678 s, 23,441,408 bytes, S=323, K=31.417257 and 74.858413
+points. This improves on `d9db9d0` / `run-23861fe20fc1` at 72.786677 points.

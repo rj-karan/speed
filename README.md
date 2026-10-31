@@ -32,9 +32,9 @@ SHA-256 to `check.py`. Never substitute a public-seed hash for another seed.
 | Track | Approach | Details |
 |---|---|---|
 | A | Hour-local parallel parsing, compact records and nearest-rank selection | [README](track-a/README.md), [PERF](track-a/PERF.md) |
-| B | Query-first postings, sparse Boolean operations, anchored phrase verification | [README](track-b/README.md), [PERF](track-b/PERF.md) |
+| B | Exact hybrid postings/bitmaps and anchored phrase verification | [README](track-b/README.md), [PERF](track-b/PERF.md) |
 | C | Parallel hostile CSV parsing, indexed region join, shared distinct-name masks | [README](track-c/README.md), [PERF](track-c/PERF.md) |
-| D | Forward/reverse CSR, bidirectional Dijkstra, four query workers | [README](track-d/README.md), [PERF](track-d/PERF.md) |
+| D | Forward/reverse CSR, radix heaps and four query workers | [README](track-d/README.md), [PERF](track-d/PERF.md) |
 
 PERF logs distinguish official run IDs from local experiments and pending runs.
 The board displays historical bests; final scoring evaluates the commit recorded
