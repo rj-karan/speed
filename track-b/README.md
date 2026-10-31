@@ -1,20 +1,26 @@
-# Track B: Index (BeyondBug)
+# Track B: Index
+
+The task, the input files and the exact output format are in the [spec](https://github.com/hackathon-raptors/speed-demon-2026/blob/main/specs/b-index.md).
 
 ## Approach
 
-Our Track B solution is implemented in pure standard-library Rust with zero runtime dependencies ($D = 1$).
+The C++ program reads the queries first and interns only terms that are actually
+queried. It memory maps the corpus, tokenizes ASCII bytes exactly as specified,
+and builds sorted document-id posting lists only for those terms. Six workers scan
+disjoint document ranges, then merge their posting lists in document order. Repeated terms
+within a document add one posting. Boolean operators use sorted set intersection,
+union, and difference strictly from left to right. Phrase queries begin with the
+rarest term's posting list, check the other terms' postings, and then re-tokenize
+candidate documents to verify consecutive positions. Output counts, sums and the
+smallest ten ids are computed from the resulting sorted document list. Six query
+workers evaluate independent queries and write their results in original order.
 
-### Key Architectural Decisions
+## Dependencies
 
-1. **Query-First Term Interning**:
-   Only terms that appear in queries are interned and tracked. Any document tokens not in the query vocabulary are quickly bypassed with zero allocation.
-2. **Open-Addressing Term Hash Table**:
-   Terms are indexed using an open-addressing table with FNV-1a hashing for fast $O(1)$ lookups without memory allocator overhead.
-3. **12-Thread Parallel Document Indexing**:
-   Documents are partitioned across all 12 worker threads. Thread-local posting lists are combined into pre-allocated contiguous vectors without requiring sorting.
-4. **12-Thread Parallel Query Evaluation**:
-   Queries are dynamically distributed using relaxed atomic fetch-add work stealing.
-5. **Short-Circuit Boolean & Phrase Verification**:
-   Boolean operators evaluate left-to-right with sorted two-pointer intersection, union, and difference. Phrase queries search candidate documents starting from the rarest term and verify token sequences.
-6. **Zero Dependencies**:
-   $D = 1$ to maximize the dependency scoring term $(1/D)^{0.15} = 1.0$.
+None.
+
+## With another 24 hours
+
+Profile common-term Boolean chains and test a compact bitset for frequent query
+terms. Phrase candidates are already sparse, so the Boolean path is the likely
+bottleneck at full scale.
