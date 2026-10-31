@@ -108,3 +108,28 @@ not official scores. Source-size cost still needs board confirmation.
 
 Public full hash, official seed-2 sample, official seed-17 tiny reference, and the
 2,500-query independent byte-regex oracle all pass.
+
+## Block tokenization and batched lookup (board confirmation pending)
+
+Official baseline `run-1f45f9a9e867` at `1a14f38`: 1.003784 s, 91,025,408 bytes,
+S=449, K=11.150792 and 52.365287 points. Memory improved, but the two-pass
+index was slower on the scoring CPU than our previous posting-vector version.
+
+A one-pass adaptive-vector/bitmap experiment passed correctness but raised the
+local peak to about 202 MB for a 13% time saving. Rejected: the combined memory
+and source penalty did not justify it. A direct short-word lookup alone saved
+about 6% locally, also insufficient as the main change.
+
+The submitted follow-up classifies 32-byte blocks and emits token boundaries
+from a transition mask, carrying tokens across blocks. This replaces one SIMD
+classification per token with one per block. Sixteen prepared tokens batch hash
+probes and prefetch their slots. A collision-free 20-bit key handles one-to-four
+ASCII letters; digit-containing and longer tokens use exact collision-checked
+hash lookup. Phrase answers collect count/sum/first ten directly from sorted
+candidates, and posting membership checks reject impossible candidates before
+reading their document text. No full-size result bitmap is needed for phrases.
+
+Five alternating local full-data process runs: original compact index middle-three
+mean 0.692636 s; new 0.497411 s (28.2% reduction). These are local numbers, not a
+prediction of the official score. Full public hash, seed-2 sample, seed-17 tiny,
+and the independent 2,500-query oracle pass. Official K remains pending.

@@ -27,3 +27,10 @@ Local comparisons and pending official confirmation are recorded in PERF.md.
 
 Profile the two tokenization passes on the scoring CPU and test a direct lookup
 for frequent short words. Compare time, cgroup peak and formatted source cost.
+
+The tokenizer classifies 32-byte blocks and emits start/end transitions, carrying
+partial tokens across blocks and respecting the document tail. Sixteen-token
+batches prefetch dictionary slots. One-to-four-letter words use an exact 20-bit
+key; digits and longer words retain full byte equality checks. Phrase candidates
+first pass posting-membership checks, then matching documents contribute directly
+to count, sum and the first ten IDs without a document-sized answer bitmap.

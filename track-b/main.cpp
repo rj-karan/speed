@@ -54,8 +54,20 @@ static void parse_queries(Mapping input, unordered_map<string_view, uint32_t> &i
 }
 
 struct Slot { uint64_t hash = 0; uint32_t id = UINT32_MAX; };
-struct Terms { vector<Slot> slots; vector<string_view> names; size_t mask; };
+struct Terms { vector<Slot> slots; vector<string_view> names; vector<uint32_t> short_ids; size_t mask; };
 
+// Exact base-32 encoding for one to four ASCII letters. Digits use the
+// general collision-checked table. Zero padding preserves the token length.
+static uint32_t short_key(const char *p, size_t n, size_t available) {
+    if (n > 4) return UINT32_MAX;
+    uint32_t bytes = 0;
+    if (available >= 4) memcpy(&bytes, p, 4);
+    else for (size_t i = 0; i < n; ++i) bytes |= uint32_t(static_cast<unsigned char>(p[i])) << (i * 8);
+    uint32_t mask = n == 4 ? UINT32_MAX : (uint32_t(1) << (n * 8)) - 1;
+    bytes &= mask;
+    if ((bytes & 0x40404040U) != (mask & 0x40404040U)) return UINT32_MAX;
+    return _pext_u32(bytes, 0x1f1f1f1fU);
+}
 static uint64_t hash_term(string_view term) {
     // Tokens contain only ASCII letters/digits. OR 0x20 folds letters and leaves
     // digits unchanged. Length and exact equality distinguish padded values.
@@ -79,6 +91,7 @@ static uint64_t hash_term(string_view term) {
 }
 static Terms make_terms(const unordered_map<string_view, uint32_t> &ids) {
     Terms table;
+    table.short_ids.resize(1 << 20, UINT32_MAX - 1);
     size_t capacity = 1;
     while (capacity < ids.size() * 2) capacity *= 2;
     table.slots.resize(capacity);
@@ -86,6 +99,8 @@ static Terms make_terms(const unordered_map<string_view, uint32_t> &ids) {
     table.mask = capacity - 1;
     for (const auto &[name, id] : ids) {
         table.names[id] = name;
+        uint32_t direct = short_key(name.data(), name.size(), name.size());
+        if (direct != UINT32_MAX) table.short_ids[direct] = id;
         uint64_t hash = hash_term(name);
         size_t index = hash & table.mask;
         while (table.slots[index].id != UINT32_MAX) index = (index + 1) & table.mask;
@@ -94,29 +109,54 @@ static Terms make_terms(const unordered_map<string_view, uint32_t> &ids) {
     return table;
 }
 static bool equal_term(const char *p, string_view word);
-static uint32_t token(const char *&p, const char *end, const Terms &terms) {
-    auto alnum = [](unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'); };
-    while (p < end && !alnum(*p)) ++p;
-    if (p == end) return UINT32_MAX;
-    const char *start = p;
-    while (end - p >= 16) {
-        __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i *>(p));
-        __m128i folded = _mm_or_si128(bytes, _mm_set1_epi8(0x20));
-        __m128i letters = _mm_and_si128(_mm_cmpgt_epi8(folded, _mm_set1_epi8('a' - 1)), _mm_cmpgt_epi8(_mm_set1_epi8('z' + 1), folded));
-        __m128i digits = _mm_and_si128(_mm_cmpgt_epi8(bytes, _mm_set1_epi8('0' - 1)), _mm_cmpgt_epi8(_mm_set1_epi8('9' + 1), bytes));
-        unsigned stops = (~unsigned(_mm_movemask_epi8(_mm_or_si128(letters, digits)))) & 65535;
-        if (stops) { p += __builtin_ctz(stops); break; }
-        p += 16;
+struct Pending { const char *start; size_t length; uint64_t hash; uint32_t id; };
+static Pending prepare_token(const char *start, size_t length, const char *end, const Terms &terms) {
+    uint32_t direct = short_key(start, length, end - start);
+    if (direct != UINT32_MAX) return {nullptr, 0, 0, terms.short_ids[direct]};
+    uint64_t hash = hash_term({start, length});
+    __builtin_prefetch(&terms.slots[hash & terms.mask], 0, 3);
+    return {start, length, hash, 0};
+}
+template<class Consumer>
+static void scan_tokens(const char *p, const char *end, Consumer consume) {
+    const char *start = nullptr;
+    unsigned previous = 0;
+    while (end - p >= 32) {
+        __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(p));
+        __m256i folded = _mm256_or_si256(bytes, _mm256_set1_epi8(0x20));
+        __m256i letters = _mm256_and_si256(_mm256_cmpgt_epi8(folded, _mm256_set1_epi8('a' - 1)), _mm256_cmpgt_epi8(_mm256_set1_epi8('z' + 1), folded));
+        __m256i digits = _mm256_and_si256(_mm256_cmpgt_epi8(bytes, _mm256_set1_epi8('0' - 1)), _mm256_cmpgt_epi8(_mm256_set1_epi8('9' + 1), bytes));
+        unsigned mask = _mm256_movemask_epi8(_mm256_or_si256(letters, digits));
+        unsigned transitions = mask ^ ((mask << 1) | previous);
+        while (transitions) {
+            unsigned bit = __builtin_ctz(transitions);
+            if (mask & (1U << bit)) start = p + bit;
+            else consume(start, size_t(p + bit - start));
+            transitions &= transitions - 1;
+        }
+        previous = mask >> 31; p += 32;
     }
-    while (p < end && alnum(*p)) ++p;
-    string_view word(start, p - start);
-    uint64_t hash = hash_term(word);
+    while (p < end) {
+        unsigned char c = *p;
+        unsigned valid = ((c | 32) >= 'a' && (c | 32) <= 'z') || (c >= '0' && c <= '9');
+        if (valid != previous) {
+            if (valid) start = p;
+            else consume(start, size_t(p - start));
+        }
+        previous = valid; ++p;
+    }
+    if (previous) consume(start, size_t(end - start));
+}
+static uint32_t resolve(const Pending &pending, const Terms &terms) {
+    if (!pending.start) return pending.id;
+    const char *start = pending.start;
+    uint64_t hash = pending.hash;
     size_t index = hash & terms.mask;
     while (terms.slots[index].id != UINT32_MAX) {
         const Slot &slot = terms.slots[index];
         if (slot.hash == hash) {
             string_view want = terms.names[slot.id];
-            if (want.size() == word.size() && equal_term(start, want)) return slot.id;
+            if (want.size() == pending.length && equal_term(start, want)) return slot.id;
         }
         index = (index + 1) & terms.mask;
     }
@@ -224,14 +264,23 @@ int main() {
         auto &positions = counts[worker];
         for (size_t doc = begin; doc < finish; ++doc) {
             const char *t = docs[doc].data(), *doc_end = t + docs[doc].size();
-            while (t < doc_end) {
-                uint32_t id = token(t, doc_end, terms);
-                if (id >= term_count || last_doc[id] == doc) continue;
-                last_doc[id] = doc;
-                if (!write) ++positions[id];
-                else if (postings[id].dense) dense[postings[id].offset + doc / 64] |= uint64_t(1) << (doc & 63);
-                else sparse[positions[id]++] = doc;
-            }
+            Pending batch[16]; size_t size = 0;
+            auto flush = [&]() {
+                for (size_t j = 0; j < size; ++j) {
+                    uint32_t id = resolve(batch[j], terms);
+                    if (id >= term_count || last_doc[id] == doc) continue;
+                    last_doc[id] = doc;
+                    if (!write) ++positions[id];
+                    else if (postings[id].dense) dense[postings[id].offset + doc / 64] |= uint64_t(1) << (doc & 63);
+                    else sparse[positions[id]++] = doc;
+                }
+                size = 0;
+            };
+            scan_tokens(t, doc_end, [&](const char *start, size_t length) {
+                batch[size++] = prepare_token(start, length, doc_end, terms);
+                if (size == 16) flush();
+            });
+            flush();
         }
     };
     auto pass = [&](bool write) {
@@ -271,15 +320,27 @@ int main() {
             size_t query_id = next_query.fetch_add(1, memory_order_relaxed);
             if (query_id >= queries.size()) break;
             const Query &q = queries[query_id];
-            fill(result.begin(), result.end(), 0);
+            uint64_t sum = 0, count = 0;
+            uint32_t first[10];
             if (q.phrase) {
                 size_t anchor = 0;
                 for (size_t j = 1; j < q.terms.size(); ++j)
                     if (postings[q.terms[j]].count < postings[q.terms[anchor]].count) anchor = j;
                 visit(q.terms[anchor], [&](uint32_t doc) {
-                    if (contains_phrase(docs[doc], q, terms, anchor)) result[doc / 64] |= uint64_t(1) << (doc & 63);
+                    for (uint32_t id : q.terms) {
+                        if (id == q.terms[anchor]) continue;
+                        const Posting &list = postings[id];
+                        if (list.dense) {
+                            if (!(dense[list.offset + doc / 64] & (uint64_t(1) << (doc & 63)))) return;
+                        } else if (!list.count || !binary_search(sparse.data() + list.offset, sparse.data() + list.offset + list.count, doc)) return;
+                    }
+                    if (contains_phrase(docs[doc], q, terms, anchor)) {
+                        if (count < 10) first[count] = doc;
+                        ++count; sum += doc;
+                    }
                 });
             } else {
+                fill(result.begin(), result.end(), 0);
                 visit(q.terms[0], [&](uint32_t doc) { result[doc / 64] |= uint64_t(1) << (doc & 63); });
                 for (size_t i = 0; i < q.ops.size(); ++i) {
                     const auto &next = postings[q.terms[i + 1]];
@@ -302,9 +363,7 @@ int main() {
                     }
                 }
             }
-            uint64_t sum = 0, count = 0;
-            uint32_t first[10];
-            for (size_t j = 0; j < words; ++j) {
+            if (!q.phrase) for (size_t j = 0; j < words; ++j) {
                 uint64_t bits = result[j];
                 while (bits) {
                     uint32_t doc = j * 64 + __builtin_ctzll(bits);
