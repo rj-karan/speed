@@ -7,7 +7,8 @@ Every step from the reference to your final version, each with the live-board ru
 | 0 | The reference, unchanged | | 14.44 | 367 | 0 |
 | 1 | Replace per-record Python objects with a mapped CSV parser, indexed join, and globally interned names with country membership bits | run-9f1d47d29d62 | 0.906522 | 12.34 | 42.51 |
 | 2 | Store each distinct name in a compact open-addressed table, retaining bytewise equality checks | run-4bba7972a60f | 0.577201 | 9.91 | 48.01 |
-| 3 | Parse three record-aligned ranges in parallel and merge name membership masks | pending board ID | pending | pending | pending |
+| 3 | Parse three record-aligned ranges in parallel and merge name membership masks | run-a04bbae35fdc | 0.319128 | 23.0 | 49.91 |
+| 4 | Store each name's hash in its dedup slot and prefetch the slot right after the name is parsed | run-851a9e87bcce | 0.225056 | 26.1 | 53.04 |
 
 Local `check.py` passed the official seed-1 full output hash
 `d8088b1cd42ba1338b1345b107b55db7b96ef1f5066f3ff64fd26a8912a0f536`.
@@ -22,6 +23,23 @@ measured 0.770184 s and 12.52 MB with that implementation.
 
 The compact table reduced the local full sandbox check from about 2.15 s to
 1.73 s. The board measured 0.577201 s and 9.91 MB, raising K from 7.66 to 9.12.
+
+Parsing three record-aligned ranges in parallel (run-a04bbae35fdc) took the
+board to 0.319128 s at 23.0 MB and K 9.96. Peak memory rose because each worker
+keeps its own name table, but the track still uses far less than the 367 MB
+reference, so the time win dominated.
+
+A profile then showed distinct-name dedup was about 77% of the run (236 ms of
+306 ms locally), bound by random cache misses into the per-worker name table and
+by dereferencing each stored name back into the 195 MB CSV mapping on every
+probe. Two changes addressed this without changing the output: each slot now
+stores the name's hash, so a hash mismatch skips the string compare (and its
+mapping dereference), and the home slot is prefetched the moment the name is
+parsed, so the miss overlaps the note, region and amount parsing that follows.
+Local full sandbox time fell from 306 ms to 280 ms; the board (run-851a9e87bcce)
+measured 0.225056 s at 26.1 MB, raising K from 9.96 to 11.50. Board timings for
+the unchanged parallel-parse code varied between 0.286 s and 0.340 s across runs,
+and 0.225 s sits below that whole range, so the gain is real rather than noise.
 
 The seed-2 sample generated from the published generator also matched its Python
 reference output hash `f389938275df1b495a38c4375fe741795df180e64617e01e2cf77a95a56982a3`.
