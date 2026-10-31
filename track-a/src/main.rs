@@ -4,7 +4,6 @@ use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Barrier};
 
-
 extern "C" {
     fn mmap(addr: *mut u8, length: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *mut u8;
 }
@@ -20,6 +19,13 @@ struct AtomicSlot {
     offset: AtomicU32,
     len: AtomicU16,
     id: AtomicU16,
+}
+
+#[derive(Clone, Copy)]
+struct FastSlot {
+    hash: u32,
+    len: u16,
+    id: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -59,9 +65,9 @@ fn intern_endpoint_fast(
     base: *const u8,
     table: &[AtomicSlot],
     next_id: &AtomicU16,
-    local_cache: &mut [LocalCacheEntry; 1024],
+    local_cache: &mut [LocalCacheEntry; 2048],
 ) -> u16 {
-    let cache_idx = (h as usize) & 1023;
+    let cache_idx = (h as usize) & 2047;
     let cached = local_cache[cache_idx];
     if cached.hash == h && cached.len as usize == ep_bytes.len() {
         let existing = unsafe { std::slice::from_raw_parts(base.add(cached.offset as usize), cached.len as usize) };
@@ -116,34 +122,16 @@ fn intern_endpoint_fast(
 }
 
 #[inline(always)]
-fn lookup_endpoint_read_only(
+fn lookup_endpoint_fast(
     h: u32,
-    ep_bytes: &[u8],
-    base: *const u8,
-    table: &[AtomicSlot],
-    local_cache: &[LocalCacheEntry; 1024],
+    ep_len: u16,
+    table: &[FastSlot],
 ) -> u16 {
-    let cache_idx = (h as usize) & 1023;
-    let cached = local_cache[cache_idx];
-    if cached.hash == h && cached.len as usize == ep_bytes.len() {
-        let existing = unsafe { std::slice::from_raw_parts(base.add(cached.offset as usize), cached.len as usize) };
-        if existing == ep_bytes {
-            return cached.id;
-        }
-    }
-
     let mut s = (h as usize) & TABLE_MASK;
     loop {
-        let slot = &table[s];
-        if slot.hash.load(Ordering::Relaxed) == h {
-            let off = slot.offset.load(Ordering::Relaxed) as usize;
-            let len = slot.len.load(Ordering::Relaxed) as usize;
-            if len == ep_bytes.len() {
-                let existing = unsafe { std::slice::from_raw_parts(base.add(off), len) };
-                if existing == ep_bytes {
-                    return slot.id.load(Ordering::Relaxed) - 1;
-                }
-            }
+        let slot = unsafe { table.get_unchecked(s) };
+        if slot.hash == h && slot.len == ep_len {
+            return slot.id;
         }
         s = (s + 1) & TABLE_MASK;
     }
@@ -188,18 +176,6 @@ unsafe fn write_u64_ptr(mut n: u64, ptr: *mut u8) -> *mut u8 {
     let len = 20 - i;
     std::ptr::copy_nonoverlapping(tmp.as_ptr().add(i), ptr, len);
     ptr.add(len)
-}
-
-#[inline(always)]
-fn get_p50_p95_p99(slice: &mut [u32]) -> (u64, u64, u64) {
-    let count = slice.len();
-    if count > 1 {
-        slice.sort_unstable();
-    }
-    let p50 = slice[(50 * count + 99) / 100 - 1] as u64;
-    let p95 = slice[(95 * count + 99) / 100 - 1] as u64;
-    let p99 = slice[(99 * count + 99) / 100 - 1] as u64;
-    (p50, p95, p99)
 }
 
 fn main() {
@@ -255,15 +231,8 @@ fn main() {
     }).collect();
     let next_ep_id = AtomicU16::new(0);
 
-    let global_counts: Vec<AtomicU32> = (0..TOTAL_GROUPS).map(|_| AtomicU32::new(0)).collect();
-    let global_errors: Vec<AtomicU32> = (0..TOTAL_GROUPS).map(|_| AtomicU32::new(0)).collect();
-    let write_cursors: Vec<AtomicU32> = (0..TOTAL_GROUPS).map(|_| AtomicU32::new(0)).collect();
-
     let table_ref = Arc::new(atomic_table);
     let next_id_ref = Arc::new(next_ep_id);
-    let counts_ref = Arc::new(global_counts);
-    let errors_ref = Arc::new(global_errors);
-    let cursors_ref = Arc::new(write_cursors);
 
     let mut hour_strings: Vec<String> = Vec::with_capacity(NUM_SLOTS);
     for slot in 0..NUM_SLOTS {
@@ -281,8 +250,31 @@ fn main() {
     let hour_strings_arc = Arc::new(hour_strings);
 
     let barrier = Arc::new(Barrier::new(num_threads));
+
+    // Shared structures for the stages
+    let mut thread_counts_vecs: Vec<Vec<u16>> = (0..num_threads).map(|_| vec![0u16; TOTAL_GROUPS]).collect();
+    let mut thread_errors_vecs: Vec<Vec<u16>> = (0..num_threads).map(|_| vec![0u16; TOTAL_GROUPS]).collect();
+    let mut counts_ptrs: Vec<*mut u16> = thread_counts_vecs.iter_mut().map(|v| v.as_mut_ptr()).collect();
+    let mut errors_ptrs: Vec<*mut u16> = thread_errors_vecs.iter_mut().map(|v| v.as_mut_ptr()).collect();
+    let all_thread_counts_ptr = counts_ptrs.as_mut_ptr() as usize;
+    let all_thread_errors_ptr = errors_ptrs.as_mut_ptr() as usize;
+
+    let mut global_counts: Vec<u32> = vec![0u32; TOTAL_GROUPS];
+    let mut global_errors: Vec<u32> = vec![0u32; TOTAL_GROUPS];
+    let global_counts_ptr = global_counts.as_mut_ptr() as usize;
+    let global_errors_ptr = global_errors.as_mut_ptr() as usize;
+
+    let mut slot_totals = vec![0usize; NUM_SLOTS];
+    let slot_totals_ptr = slot_totals.as_mut_ptr() as usize;
+
+    let mut slot_start_offsets = vec![0usize; NUM_SLOTS + 1];
+    let slot_start_offsets_ptr = slot_start_offsets.as_mut_ptr() as usize;
+
     let mut offsets = vec![0usize; TOTAL_GROUPS + 1];
     let offsets_ptr = offsets.as_mut_ptr() as usize;
+
+    let mut fast_table = vec![FastSlot { hash: 0, len: 0, id: 0 }; TABLE_CAP];
+    let fast_table_ptr = fast_table.as_mut_ptr() as usize;
 
     let mut all_latencies: Vec<u32> = Vec::new();
     let all_latencies_ptr = &mut all_latencies as *mut Vec<u32> as usize;
@@ -300,17 +292,20 @@ fn main() {
         let end = boundaries[thread_id + 1];
         let t_table = Arc::clone(&table_ref);
         let t_next = Arc::clone(&next_id_ref);
-        let t_counts = Arc::clone(&counts_ref);
-        let t_errors = Arc::clone(&errors_ref);
-        let t_cursors = Arc::clone(&cursors_ref);
         let t_hours = Arc::clone(&hour_strings_arc);
         let bar = Arc::clone(&barrier);
 
         let handle = std::thread::spawn(move || {
             let base = raw_ptr as *const u8;
-            let mut local_cache = [LocalCacheEntry { hash: 0, offset: 0, len: 0, id: 0 }; 1024];
+            let mut local_cache = [LocalCacheEntry { hash: 0, offset: 0, len: 0, id: 0 }; 2048];
 
-            // PASS 1: Count & Intern with SWAR newline skip
+            let my_counts_ptr = unsafe { *((all_thread_counts_ptr as *const *mut u16).add(thread_id)) };
+            let my_errors_ptr = unsafe { *((all_thread_errors_ptr as *const *mut u16).add(thread_id)) };
+
+            let mut t_min_slot = 72u32;
+            let mut t_max_slot = 0u32;
+
+            // PASS 1: Thread-local count & intern
             let mut p = unsafe { base.add(start) };
             let p_end = unsafe { base.add(end) };
 
@@ -356,26 +351,90 @@ fn main() {
                     let ep_id = intern_endpoint_fast(h, ep_bytes, ep_offset, base, &t_table, &t_next, &mut local_cache);
                     let g = (slot as usize) * MAX_ENDPOINTS + (ep_id as usize);
 
-                    t_counts[g].fetch_add(1, Ordering::Relaxed);
+                    let c = *my_counts_ptr.add(g);
+                    *my_counts_ptr.add(g) = c.wrapping_add(1);
                     if is_5xx {
-                        t_errors[g].fetch_add(1, Ordering::Relaxed);
+                        let e = *my_errors_ptr.add(g);
+                        *my_errors_ptr.add(g) = e.wrapping_add(1);
                     }
+
+                    if slot < t_min_slot { t_min_slot = slot; }
+                    if slot > t_max_slot { t_max_slot = slot; }
                 }
             }
 
             bar.wait();
 
-            if thread_id == 0 {
-                let off_slice = unsafe { std::slice::from_raw_parts_mut(offsets_ptr as *mut usize, TOTAL_GROUPS + 1) };
-                for g in 0..TOTAL_GROUPS {
-                    let cnt = t_counts[g].load(Ordering::Relaxed) as usize;
-                    off_slice[g + 1] = off_slice[g] + cnt;
-                    t_cursors[g].store(off_slice[g] as u32, Ordering::Relaxed);
-                }
+            // STEP 2: Parallel reduction of slots per thread
+            let slots_per_thread = (NUM_SLOTS + num_threads - 1) / num_threads;
+            let my_s_start = (thread_id * slots_per_thread).min(NUM_SLOTS);
+            let my_s_end = ((thread_id + 1) * slots_per_thread).min(NUM_SLOTS);
 
-                let total_records = off_slice[TOTAL_GROUPS];
+            let all_counts = all_thread_counts_ptr as *const *const u16;
+            let all_errors = all_thread_errors_ptr as *const *const u16;
+            let g_cnt_ptr = global_counts_ptr as *mut u32;
+            let g_err_ptr = global_errors_ptr as *mut u32;
+            let s_tot_ptr = slot_totals_ptr as *mut usize;
+
+            for s in my_s_start..my_s_end {
+                let g_base = s * MAX_ENDPOINTS;
+                let mut slot_cnt: usize = 0;
+                unsafe {
+                    std::ptr::write_bytes(g_cnt_ptr.add(g_base), 0, MAX_ENDPOINTS);
+                    std::ptr::write_bytes(g_err_ptr.add(g_base), 0, MAX_ENDPOINTS);
+                }
+                for t in 0..num_threads {
+                    unsafe {
+                        let t_cnt_p = (*all_counts.add(t)).add(g_base);
+                        let t_err_p = (*all_errors.add(t)).add(g_base);
+                        for ep_id in 0..MAX_ENDPOINTS {
+                            let c = *t_cnt_p.add(ep_id) as u32;
+                            if c > 0 {
+                                *g_cnt_ptr.add(g_base + ep_id) += c;
+                                let e = *t_err_p.add(ep_id) as u32;
+                                *g_err_ptr.add(g_base + ep_id) += e;
+                            }
+                        }
+                    }
+                }
+                for ep_id in 0..MAX_ENDPOINTS {
+                    slot_cnt += unsafe { *g_cnt_ptr.add(g_base + ep_id) } as usize;
+                }
+                unsafe {
+                    *s_tot_ptr.add(s) = slot_cnt;
+                }
+            }
+
+            bar.wait();
+
+            // STEP 3: Thread 0 prefix sums slots, resizes latencies, builds fast_table & ep_store
+            if thread_id == 0 {
+                let s_tot = unsafe { std::slice::from_raw_parts(slot_totals_ptr as *const usize, NUM_SLOTS) };
+                let s_starts = unsafe { std::slice::from_raw_parts_mut(slot_start_offsets_ptr as *mut usize, NUM_SLOTS + 1) };
+                let mut cur = 0usize;
+                for s in 0..NUM_SLOTS {
+                    s_starts[s] = cur;
+                    cur += s_tot[s];
+                }
+                s_starts[NUM_SLOTS] = cur;
+
                 let lat_vec = unsafe { &mut *(all_latencies_ptr as *mut Vec<u32>) };
-                lat_vec.resize(total_records, 0);
+                if lat_vec.capacity() < cur {
+                    lat_vec.reserve(cur - lat_vec.len());
+                }
+                unsafe { lat_vec.set_len(cur); }
+
+                let ft = unsafe { std::slice::from_raw_parts_mut(fast_table_ptr as *mut FastSlot, TABLE_CAP) };
+                for s in 0..TABLE_CAP {
+                    let cur_h = t_table[s].hash.load(Ordering::Relaxed);
+                    if cur_h != 0 {
+                        ft[s] = FastSlot {
+                            hash: cur_h,
+                            len: t_table[s].len.load(Ordering::Relaxed),
+                            id: t_table[s].id.load(Ordering::Relaxed) - 1,
+                        };
+                    }
+                }
 
                 let store = unsafe { &mut *(ep_slices_ptr as *mut Vec<(usize, usize, usize)>) };
                 store.clear();
@@ -397,9 +456,52 @@ fn main() {
 
             bar.wait();
 
-            // PASS 2: Re-scan and direct scatter with read-only lookup
+            // STEP 4: Parallel group offsets computation
+            let s_starts = unsafe { std::slice::from_raw_parts(slot_start_offsets_ptr as *const usize, NUM_SLOTS) };
+            let off_ptr = offsets_ptr as *mut usize;
+            for s in my_s_start..my_s_end {
+                let mut cur_off = s_starts[s];
+                for ep_id in 0..MAX_ENDPOINTS {
+                    let g = s * MAX_ENDPOINTS + ep_id;
+                    unsafe {
+                        *off_ptr.add(g) = cur_off;
+                        cur_off += *g_cnt_ptr.add(g) as usize;
+                    }
+                }
+            }
+
+            bar.wait();
+
+            // STEP 5: Initialize thread-local cursors for Pass 2
+            let local_slots = if t_min_slot <= t_max_slot { (t_max_slot - t_min_slot + 1) as usize } else { 0 };
+            let mut my_cursors = vec![0u32; local_slots * MAX_ENDPOINTS];
+
+            if t_min_slot <= t_max_slot {
+                for s in t_min_slot..=t_max_slot {
+                    let s_idx = s as usize;
+                    let local_base = (s_idx - t_min_slot as usize) * MAX_ENDPOINTS;
+                    for ep_id in 0..MAX_ENDPOINTS {
+                        let g = s_idx * MAX_ENDPOINTS + ep_id;
+                        let my_cnt = unsafe { *my_counts_ptr.add(g) };
+                        if my_cnt > 0 {
+                            let mut my_start = unsafe { *off_ptr.add(g) } as u32;
+                            for k in 0..thread_id {
+                                unsafe {
+                                    let k_cnt_p = *all_counts.add(k);
+                                    my_start += *k_cnt_p.add(g) as u32;
+                                }
+                            }
+                            my_cursors[local_base + ep_id] = my_start;
+                        }
+                    }
+                }
+            }
+
+            // PASS 2: Re-scan and direct lock-free thread-local scatter
             let lat_vec = unsafe { &mut *(all_latencies_ptr as *mut Vec<u32>) };
             let lat_base = lat_vec.as_mut_ptr();
+            let ft = unsafe { std::slice::from_raw_parts(fast_table_ptr as *const FastSlot, TABLE_CAP) };
+
             p = unsafe { base.add(start) };
 
             unsafe {
@@ -421,7 +523,6 @@ fn main() {
                     p = p.add(method_len);
 
                     let (ep_len, h) = find_space_and_hash(p);
-                    let ep_bytes = std::slice::from_raw_parts(p, ep_len);
                     p = p.add(ep_len + 5);
 
                     let mut lat = (*p - b'0') as u32;
@@ -432,11 +533,12 @@ fn main() {
                     }
                     p = p.add(1);
 
-                    let ep_id = lookup_endpoint_read_only(h, ep_bytes, base, &t_table, &local_cache);
-                    let g = (slot as usize) * MAX_ENDPOINTS + (ep_id as usize);
+                    let ep_id = lookup_endpoint_fast(h, ep_len as u16, ft);
+                    let local_idx = ((slot - t_min_slot) as usize) * MAX_ENDPOINTS + (ep_id as usize);
 
-                    let pos = t_cursors[g].fetch_add(1, Ordering::Relaxed) as usize;
-                    *lat_base.add(pos) = lat;
+                    let pos = my_cursors[local_idx];
+                    my_cursors[local_idx] = pos + 1;
+                    *lat_base.add(pos as usize) = lat;
                 }
             }
 
@@ -444,29 +546,55 @@ fn main() {
 
             // PASS 3: Partition percentiles and format output using pointer writing
             let off_slice = unsafe { std::slice::from_raw_parts(offsets_ptr as *const usize, TOTAL_GROUPS + 1) };
-            let slots_per_thread = (NUM_SLOTS + num_threads - 1) / num_threads;
-            let s_start = (thread_id * slots_per_thread).min(NUM_SLOTS);
-            let s_end = ((thread_id + 1) * slots_per_thread).min(NUM_SLOTS);
             let ep_store = unsafe { &*(ep_slices_ptr as *const Vec<(usize, usize, usize)>) };
 
             let mut buf: Vec<u8> = Vec::with_capacity(1024 * 1024);
 
-            for slot in s_start..s_end {
+            for slot in my_s_start..my_s_end {
                 let hour_bytes = t_hours[slot].as_bytes();
                 for &(orig_id, ep_off, ep_len) in ep_store.iter() {
                     let g = slot * MAX_ENDPOINTS + orig_id;
-                    let count = t_counts[g].load(Ordering::Relaxed) as usize;
+                    let count = unsafe { *g_cnt_ptr.add(g) } as usize;
                     if count == 0 {
                         continue;
                     }
                     let start = off_slice[g];
-                    let end = off_slice[g + 1];
-                    let group_slice = unsafe { std::slice::from_raw_parts_mut(lat_base.add(start), end - start) };
+                    let group_slice = unsafe { std::slice::from_raw_parts_mut(lat_base.add(start), count) };
 
-                    let (p50, p95, p99) = get_p50_p95_p99(group_slice);
+                    let (p50, p95, p99) = if count == 1 {
+                        let v = group_slice[0] as u64;
+                        (v, v, v)
+                    } else if count == 2 {
+                        if group_slice[0] > group_slice[1] {
+                            group_slice.swap(0, 1);
+                        }
+                        (group_slice[0] as u64, group_slice[1] as u64, group_slice[1] as u64)
+                    } else if count <= 16 {
+                        for i in 1..count {
+                            let key = group_slice[i];
+                            let mut j = i;
+                            while j > 0 && group_slice[j - 1] > key {
+                                group_slice[j] = group_slice[j - 1];
+                                j -= 1;
+                            }
+                            group_slice[j] = key;
+                        }
+                        (
+                            group_slice[(50 * count + 99) / 100 - 1] as u64,
+                            group_slice[(95 * count + 99) / 100 - 1] as u64,
+                            group_slice[(99 * count + 99) / 100 - 1] as u64,
+                        )
+                    } else {
+                        group_slice.sort_unstable();
+                        (
+                            group_slice[(50 * count + 99) / 100 - 1] as u64,
+                            group_slice[(95 * count + 99) / 100 - 1] as u64,
+                            group_slice[(99 * count + 99) / 100 - 1] as u64,
+                        )
+                    };
 
-                    let errors = t_errors[g].load(Ordering::Relaxed) as u64;
-                    let error_rate = errors * 1_000_000 / count as u64;
+                    let errors = unsafe { *g_err_ptr.add(g) } as u64;
+                    let error_rate = if errors == 0 { 0 } else { errors * 1_000_000 / count as u64 };
                     let ep_slice = unsafe { std::slice::from_raw_parts(base.add(ep_off), ep_len) };
 
                     buf.reserve(128 + ep_len);
@@ -494,11 +622,19 @@ fn main() {
                         out_p = write_u64_ptr(p99, out_p);
                         *out_p = b' '; out_p = out_p.add(1);
 
-                        out_p = write_u64_ptr(errors, out_p);
-                        *out_p = b' '; out_p = out_p.add(1);
+                        if errors == 0 {
+                            *out_p = b'0';
+                            *(out_p.add(1)) = b' ';
+                            *(out_p.add(2)) = b'0';
+                            *(out_p.add(3)) = b'\n';
+                            out_p = out_p.add(4);
+                        } else {
+                            out_p = write_u64_ptr(errors, out_p);
+                            *out_p = b' '; out_p = out_p.add(1);
 
-                        out_p = write_u64_ptr(error_rate, out_p);
-                        *out_p = b'\n'; out_p = out_p.add(1);
+                            out_p = write_u64_ptr(error_rate, out_p);
+                            *out_p = b'\n'; out_p = out_p.add(1);
+                        }
 
                         buf.set_len(out_p.offset_from(buf.as_ptr()) as usize);
                     }
@@ -521,5 +657,4 @@ fn main() {
     for chunk in out_chunks {
         out_file.write_all(&chunk).expect("write chunk");
     }
-
 }
