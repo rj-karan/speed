@@ -31,7 +31,7 @@ SHA-256 to `check.py`. Never substitute a public-seed hash for another seed.
 
 | Track | Approach | Details |
 |---|---|---|
-| A | Single-pass parallel parsing, reclaimed mapped records and exact selection | [README](track-a/README.md), [PERF](track-a/PERF.md) |
+| A | Hour-local parallel parsing, compact records and exact selection | [README](track-a/README.md), [PERF](track-a/PERF.md) |
 | B | Exact hybrid postings/bitmaps and anchored phrase verification | [README](track-b/README.md), [PERF](track-b/PERF.md) |
 | C | Parallel hostile CSV parsing, indexed region join, shared distinct-name masks | [README](track-c/README.md), [PERF](track-c/PERF.md) |
 | D | BFS-ordered CSR, shared build counters, packed state and radix heaps | [README](track-d/README.md), [PERF](track-d/PERF.md) |

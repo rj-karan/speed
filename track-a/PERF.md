@@ -101,3 +101,12 @@ mapping growth) pass. No score is claimed from these local timings.
 A compact private endpoint-byte pool was also tried: it passed correctness but
 slowed 0.031074 -> 0.032108 s locally, so it was rejected. The extra PGO build
 again showed no measurable benefit on the selected code.
+
+Official trial `run-79c5144df686` at `934d875` measured 0.044225 s,
+26,599,424 bytes, S=345, K=31.493662 and 74.911158 points. The earlier hour-local
+version at `af43e3f` (`run-0ef7bf129650`) measured 0.046833 s, 23,834,624 bytes,
+S=323, K=31.594127 and 74.980318 points. The local time gain did not transfer
+fully to the scoring CPU, and the extra memory/source cost erased it. The
+single-pass mapped-record implementation was therefore reverted to the exact
+`af43e3f` source. Both are correct; the measured combined coefficient drives
+this choice. The new large-group oracle remains useful for either implementation.

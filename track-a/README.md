@@ -1,35 +1,40 @@
-# Track A: single-pass parsing with mapped record buffers
+# Track A: hour-local aggregation
 
 ## Approach
 
-Map the input and split it at newline boundaries across twelve persistent
-workers. Each worker parses its byte range once, interns endpoints in a private
-collision-checked dictionary, and appends six-byte latency/key records to
-hour-specific anonymous mappings. The key also carries the error bit. Mappings
-grow when needed; no bound on input disorder or per-hour request count is assumed.
+The dependency-free C++ program maps the input and discovers every contiguous
+run of one hour using vectorized newline scanning. Runs are indexed by hour;
+no bound on input disorder is assumed. Twelve persistent workers then claim
+hours independently. Each hour has its own endpoint dictionary and compact
+six-byte latency/endpoint records. Exact byte comparisons resolve hash collisions.
+A counting scatter groups the latencies in a small hour-local array. Nearest-rank
+selection extracts p50/p95/p99; small groups use sorting. Endpoint keys are sorted
+bytewise, and hour buffers are written in chronological order.
 
-After parsing, merge only the small endpoint dictionaries and sort their keys
-bytewise. Workers then claim whole hours, sum local counts, scatter that hour's
-records into contiguous group slices and release its record mappings. Exact
-nearest-rank selection extracts the three percentiles. Output uses bounded mapped
-buffers that are released after their ordered writes. This removes the previous
-whole-input hour-discovery scan without relying on allocator reclamation.
+There are no shared per-request atomics, global latency scatter cursors, or
+cross-worker name-table merges. Temporary records are discarded after their
+hour is formatted. AVX2 finds endpoint delimiters; bounded packed-decimal parsing
+handles up to seven latency digits at once, with a scalar path for longer values
+and file tails. Full uint32 latency values and duplicate requests remain exact.
 
-AVX2 finds endpoint delimiters; packed decimal parsing handles short latencies,
-with scalar handling for longer values and the file tail. All equality checks
-compare complete endpoint bytes. Duplicate lines and uint32 extremes remain exact.
+## Build and validation
 
-## Dependencies and validation
+The allowlisted GCC image builds offline with `-march=native`; the event explicitly
+builds native-targeted tracks on its scoring machine, so the resulting binary
+matches that CPU. No non-standard-library runtime dependencies (D = 1).
 
-No non-standard-library runtime dependencies (D = 1). Native compilation uses the
-allowlisted GCC toolchain; the event builds it on the scoring CPU. Full public
-output, an additional official seed and the independent oracle match. The oracle
-also forces record mappings to grow with 800,000 duplicate requests, and tests
-month/hour boundaries, ordering, all methods, empty input and decimal lengths.
+Validation includes the full public hash, official seed-17 sample reference,
+and `tests/test_ingest.py`: shuffled hours, all methods, byte-order-sensitive
+endpoints, endpoint lengths around vector boundaries, every decimal digit length,
+uint32 extremes, duplicates and empty input. PERF.md distinguishes official
+board results from local experiments.
 
 ## With another 24 hours
 
-Profile parsing, scatter, percentile selection and output separately on the
-scoring CPU. Keep changes only when total time, kernel peak and formatted source
-size improve the coefficient. An endpoint string-pool experiment was rejected
-locally because it was slower than the mapped-buffer design.
+Profile range discovery, parsing and output separately on the scoring CPU.
+Compare direct mapped output and profile-guided compilation using generator
+output. Keep changes only when the combined time/memory/source coefficient improves.
+
+Output uses anonymous mapped buffers bounded by 224 bytes per populated group
+(the maximum specified row is smaller). Buffers are unmapped after each ordered
+write, avoiding allocator retention alongside the output file's page cache.

@@ -104,3 +104,11 @@ Native/PGO training on the new candidate was tested and rejected: 0.648752 ->
 0.647854 s locally was indistinguishable from noise. The training generator,
 profiles, generated training data and rejected candidates are not submitted.
 Official run ID, peak and K are pending; local timings are not official scores.
+
+Official confirmation `run-70a2baae990f` at `934d875` passed every gate:
+0.668657 s, 229,572,608 bytes, S=345, K=10.010806 and 50.023453 points. Against
+`af43e3f` / `run-47c645bff20d`, time fell 36.2% and memory 17.9%; points rose
+from 44.617289 to 50.023453 despite source increasing from 312 to 345 lines.
+This confirms the layout/build/state change improved the official coefficient.
+D still remains below the three counted tracks; this improvement alone does
+not change the overall title score.
