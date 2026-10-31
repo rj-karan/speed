@@ -140,17 +140,44 @@ static vector<uint32_t> subtract(const vector<uint32_t> &a, const vector<uint32_
 
 static bool contains_phrase(string_view text, const Query &q, const Terms &terms) {
     // Posting lists narrow candidates; this scan enforces actual token adjacency.
+    // Matching each document token against only this phrase's few terms keeps the
+    // inner loop in cache, instead of probing the whole 150k-term table per token.
+    const size_t k = q.terms.size();
+    uint64_t want_hash[8];
+    string_view want_name[8];
+    for (size_t j = 0; j < k; ++j) { want_name[j] = terms.names[q.terms[j]]; want_hash[j] = hash_term(want_name[j]); }
     uint32_t window[8];
     size_t seen = 0;
     const char *p = text.data(), *end = p + text.size();
     while (p < end) {
-        uint32_t id = token(p, end, terms);
-        if (id == UINT32_MAX) break;
+        // Same tokenization as token(): ASCII alnum runs, lowercased.
+        while (p < end && !((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9'))) ++p;
+        if (p == end) break;
+        const char *start = p;
+        uint64_t hash = 14695981039346656037ULL;
+        while (p < end && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9'))) {
+            unsigned char c = *p++;
+            if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+            hash = (hash ^ c) * 1099511628211ULL;
+        }
+        const size_t len = p - start;
+        uint32_t id = UINT32_MAX - 1; // Not one of this phrase's terms.
+        for (size_t j = 0; j < k; ++j) {
+            if (want_hash[j] != hash || want_name[j].size() != len) continue;
+            size_t i = 0;
+            while (i < len) {
+                unsigned char c = start[i];
+                if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+                if (c != (unsigned char)want_name[j][i]) break;
+                ++i;
+            }
+            if (i == len) { id = q.terms[j]; break; }
+        }
         window[seen++ & 7] = id;
-        if (seen >= q.terms.size()) {
+        if (seen >= k) {
             size_t j = 0;
-            while (j < q.terms.size() && window[(seen - q.terms.size() + j) & 7] == q.terms[j]) ++j;
-            if (j == q.terms.size()) return true;
+            while (j < k && window[(seen - k + j) & 7] == q.terms[j]) ++j;
+            if (j == k) return true;
         }
     }
     return false;
