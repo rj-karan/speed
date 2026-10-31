@@ -1,24 +1,20 @@
-# Track D: Traverse
-
-The task, the input files and the exact output format are in the [spec](https://github.com/hackathon-raptors/speed-demon-2026/blob/main/specs/d-traverse.md).
+# Track D: Traverse (BeyondBug)
 
 ## Approach
 
-The C++ program memory maps the graph and parses it twice. The first pass counts
-outgoing edges; the second fills a compact CSR adjacency array without retaining
-a second copy of the edges. Each query runs an early-exit Dijkstra search with
-64-bit distances and generation-stamped state, so clearing all node distances per
-query is unnecessary. A reverse CSR index allows the searches to proceed from
-both ends until their frontier bounds meet. Six workers process independent queries
-and write answers by query index. Zero-weight, parallel, duplicate, and
-directed edges are kept exactly. Nodes with no outgoing edges and targets with no
-incoming edges are rejected early, while identical source and target returns zero.
+Our Track D solution is implemented in pure standard-library Rust with zero runtime dependencies ($D = 1$).
 
-## Dependencies
+### Key Architectural Decisions
 
-None.
-
-## With another 24 hours
-
-Profile heap operations and test a radix heap on the published generator's query
-distribution, including unreachable cases.
+1. **Dual Compressed Sparse Row (CSR)**:
+   Builds forward and backward CSR graph representations directly from memory-mapped edge data with a single counting pass.
+2. **12-Thread Parallel Bidirectional Dijkstra**:
+   Queries are dynamically distributed across 12 worker threads using atomic fetch-add work stealing.
+3. **Generation-Stamped Search States**:
+   Each worker thread maintains pre-allocated forward and backward distance vectors with a 32-bit generation counter. This eliminates per-query memory allocations and array clearing overhead.
+4. **Contiguous Binary Min-Heap**:
+   Custom inline binary min-heap over a contiguous vector eliminates pointer chasing and heap fragmentation.
+5. **Early Termination**:
+   Bidirectional search settles the smaller boundary first and breaks immediately once the sum of top-of-heap costs meets or exceeds the best path discovered.
+6. **Zero Dependencies**:
+   $D = 1$ to maximize the dependency scoring term $(1/D)^{0.15} = 1.0$.
