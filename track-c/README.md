@@ -13,11 +13,11 @@ membership mask per distinct name. Name keys refer to raw input slices: generate
 nonempty names are always quoted, so this is a one-to-one representation of the
 unescaped value; quoted and unquoted empty names both have an empty slice.
 An open-addressed table keeps those states contiguous. It resolves hash collisions
-with exact byte comparisons and grows if a holdout seed has more distinct names.
-Three workers parse record-aligned ranges. A partition boundary follows an LF
+with exact byte comparisons with 262,144 fixed slots for the specified 100,000-name pool.
+Up to twelve workers parse record-aligned ranges. A partition boundary follows an LF
 only when the next byte begins an id or boundary BOM; generated note lines start
-with lowercase letters. Worker aggregates are summed and name masks are merged
-with a bytewise lookup, counting each new country bit once.
+with lowercase letters. Workers share the name table; an atomic country-bit claim counts a
+name once per country. Worker numeric aggregates are summed after parsing.
 Output scans country codes in byte order and writes the unmatched group last.
 
 ## Dependencies

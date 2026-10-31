@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fcntl.h>
+#include <immintrin.h>
 #include <string_view>
 #include <string>
 #include <sys/mman.h>
@@ -109,6 +110,18 @@ static uint32_t token(const char *&p, const char *end, const Terms &terms) {
 
 static vector<uint32_t> intersect(const vector<uint32_t> &a, const vector<uint32_t> &b) {
     vector<uint32_t> result; result.reserve(min(a.size(), b.size()));
+    // Sparse-vs-common terms should not scan a whole common posting list.
+    const auto &small = a.size() < b.size() ? a : b;
+    const auto &large = a.size() < b.size() ? b : a;
+    if (small.size() * 32 < large.size()) {
+        auto pos = large.begin();
+        for (uint32_t doc : small) {
+            pos = lower_bound(pos, large.end(), doc);
+            if (pos == large.end()) break;
+            if (*pos == doc) result.push_back(doc);
+        }
+        return result;
+    }
     size_t i = 0, j = 0;
     while (i < a.size() && j < b.size()) {
         if (a[i] < b[j]) ++i;
@@ -129,6 +142,14 @@ static vector<uint32_t> unite(const vector<uint32_t> &a, const vector<uint32_t> 
 }
 static vector<uint32_t> subtract(const vector<uint32_t> &a, const vector<uint32_t> &b) {
     vector<uint32_t> result; result.reserve(a.size());
+    if (a.size() * 32 < b.size()) {
+        auto pos = b.begin();
+        for (uint32_t doc : a) {
+            pos = lower_bound(pos, b.end(), doc);
+            if (pos == b.end() || *pos != doc) result.push_back(doc);
+        }
+        return result;
+    }
     size_t i = 0, j = 0;
     while (i < a.size()) {
         while (j < b.size() && b[j] < a[i]) ++j;
@@ -138,47 +159,56 @@ static vector<uint32_t> subtract(const vector<uint32_t> &a, const vector<uint32_
     return result;
 }
 
-static bool contains_phrase(string_view text, const Query &q, const Terms &terms) {
-    // Posting lists narrow candidates; this scan enforces actual token adjacency.
-    // Matching each document token against only this phrase's few terms keeps the
-    // inner loop in cache, instead of probing the whole 150k-term table per token.
-    const size_t k = q.terms.size();
-    uint64_t want_hash[8];
-    string_view want_name[8];
-    for (size_t j = 0; j < k; ++j) { want_name[j] = terms.names[q.terms[j]]; want_hash[j] = hash_term(want_name[j]); }
-    uint32_t window[8];
-    size_t seen = 0;
-    const char *p = text.data(), *end = p + text.size();
+static bool is_token_byte(unsigned char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+}
+static bool equal_term(const char *p, string_view word) {
+    for (unsigned char c : word) {
+        unsigned char actual = *p++;
+        if (actual >= 'A' && actual <= 'Z') actual += 'a' - 'A';
+        if (actual != c) return false;
+    }
+    return true;
+}
+static bool contains_phrase(string_view text, const Query &q, const Terms &terms, size_t anchor) {
+    // Search for the rarest term, then check its immediate token neighbours.
+    // Unlike hashing every token against every phrase term, this scans irrelevant
+    // text 32 bytes at a time. Loads stay inside this document, including tails.
+    const char *begin = text.data(), *end = begin + text.size(), *p = begin;
+    string_view word = terms.names[q.terms[anchor]];
+    __m256i first = _mm256_set1_epi8(word[0]);
+    __m256i fold = _mm256_set1_epi8(0x20);
     while (p < end) {
-        // Same tokenization as token(): ASCII alnum runs, lowercased.
-        while (p < end && !((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9'))) ++p;
-        if (p == end) break;
-        const char *start = p;
-        uint64_t hash = 14695981039346656037ULL;
-        while (p < end && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9'))) {
-            unsigned char c = *p++;
-            if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
-            hash = (hash ^ c) * 1099511628211ULL;
+        if (end - p >= 32) {
+            __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(p));
+            unsigned hits = _mm256_movemask_epi8(_mm256_cmpeq_epi8(_mm256_or_si256(bytes, fold), first));
+            if (!hits) { p += 32; continue; }
+            p += __builtin_ctz(hits);
+        } else {
+            while (p < end && (static_cast<unsigned char>(*p) | 0x20) != static_cast<unsigned char>(word[0])) ++p;
+            if (p == end) break;
         }
-        const size_t len = p - start;
-        uint32_t id = UINT32_MAX - 1; // Not one of this phrase's terms.
-        for (size_t j = 0; j < k; ++j) {
-            if (want_hash[j] != hash || want_name[j].size() != len) continue;
-            size_t i = 0;
-            while (i < len) {
-                unsigned char c = start[i];
-                if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
-                if (c != (unsigned char)want_name[j][i]) break;
-                ++i;
-            }
-            if (i == len) { id = q.terms[j]; break; }
+        const char *start = p++;
+        if ((start != begin && is_token_byte(start[-1])) || size_t(end - start) < word.size()) continue;
+        const char *after = start + word.size();
+        if ((after != end && is_token_byte(*after)) || !equal_term(start, word)) continue;
+        bool matches = true;
+        const char *left = start;
+        for (size_t j = anchor; j > 0 && matches; --j) {
+            while (left > begin && !is_token_byte(left[-1])) --left;
+            const char *finish = left;
+            while (left > begin && is_token_byte(left[-1])) --left;
+            string_view want = terms.names[q.terms[j - 1]];
+            matches = size_t(finish - left) == want.size() && equal_term(left, want);
         }
-        window[seen++ & 7] = id;
-        if (seen >= k) {
-            size_t j = 0;
-            while (j < k && window[(seen - k + j) & 7] == q.terms[j]) ++j;
-            if (j == k) return true;
+        for (size_t j = anchor + 1; j < q.terms.size() && matches; ++j) {
+            while (after < end && !is_token_byte(*after)) ++after;
+            const char *next = after;
+            while (after < end && is_token_byte(*after)) ++after;
+            string_view want = terms.names[q.terms[j]];
+            matches = size_t(after - next) == want.size() && equal_term(next, want);
         }
+        if (matches) return true;
     }
     return false;
 }
@@ -214,7 +244,7 @@ int main() {
     // them, and the per-worker posting overhead barely moves peak memory.
     size_t workers = thread::hardware_concurrency();
     if (!workers) workers = 1;
-    if (workers > 16) workers = 16;
+    if (workers > 12) workers = 12;
     vector<vector<vector<uint32_t>>> parts(workers);
     vector<thread> build_threads;
     for (size_t worker = 0; worker < workers; ++worker) {
@@ -258,14 +288,16 @@ int main() {
             const Query &q = queries[query_id];
             vector<uint32_t> result;
             if (q.phrase) {
-                uint32_t rarest = q.terms[0];
-                for (uint32_t id : q.terms) if (postings[id].size() < postings[rarest].size()) rarest = id;
+                size_t anchor = 0;
+                for (size_t j = 1; j < q.terms.size(); ++j)
+                    if (postings[q.terms[j]].size() < postings[q.terms[anchor]].size()) anchor = j;
+                uint32_t rarest = q.terms[anchor];
                 for (uint32_t doc : postings[rarest]) {
                     bool candidate = true;
                     for (uint32_t id : q.terms) {
                         if (!binary_search(postings[id].begin(), postings[id].end(), doc)) { candidate = false; break; }
                     }
-                    if (candidate && contains_phrase(docs[doc], q, terms)) result.push_back(doc);
+                    if (candidate && contains_phrase(docs[doc], q, terms, anchor)) result.push_back(doc);
                 }
             } else {
                 result = postings[q.terms[0]];

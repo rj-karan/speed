@@ -9,7 +9,7 @@ outgoing edges; the second fills a compact CSR adjacency array without retaining
 a second copy of the edges. Each query runs an early-exit Dijkstra search with
 64-bit distances and generation-stamped state, so clearing all node distances per
 query is unnecessary. A reverse CSR index allows the searches to proceed from
-both ends until their frontier bounds meet. Six workers process independent queries
+both ends until their frontier bounds meet. Four workers process independent queries
 and write answers by query index. Zero-weight, parallel, duplicate, and
 directed edges are kept exactly. Nodes with no outgoing edges and targets with no
 incoming edges are rejected early, while identical source and target returns zero.

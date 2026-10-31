@@ -46,3 +46,44 @@ Tokenization rules and the adjacency window are unchanged, so the output is
 identical. On the board the combined result was 1.017699 s at 282.8 MB, raising K
 from 7.90 to 9.01. Peak memory rose slightly with the extra per-worker posting
 headers but stays far under the 2.2 GB reference.
+
+## Anchored phrase verification and sparse Boolean operations (October 31)
+
+Board confirmation: pending for this commit. No local timing below is claimed as
+an official score. The previous best public run is `run-e061987e4a0a` at
+`abc2c95`: 0.999600 s, 284,090,368 bytes, S=393, K=9.078875, 47.901602 points.
+
+Replace the per-token phrase hash/window loop with an AVX2 first-byte search for
+the rarest term, exact term/boundary validation, and forward/backward neighbour
+checks. No positional index or candidate allocation is needed. Sparse Boolean
+intersections/differences use advancing lower_bound searches when the list-size
+ratio exceeds 32; comparable lists retain linear merges. Cap workers at twelve
+instead of sixteen to match the available hardware threads and reduce duplicate
+posting headers and allocator overhead.
+
+Local five-run A/B test on an AMD Ryzen 7 7435HS, pinned to six physical cores and
+their SMT siblings (`0-5,8-13`), prewarmed public input, 8 GB/no swap, read-only
+root, no network, unprivileged submission. The official `sd-timer.c` wrapper
+measured process start to exit, excluding Docker startup. Runs alternated old and
+new; all ten matched the official full hash. Discarding each version's highest
+and lowest yielded:
+
+| Version | Five process times (s) | Middle-three mean (s) |
+|---|---|---|
+| Before | 0.832480, 0.819787, 0.823531, 0.816122, 0.797028 | 0.819813 |
+| After | 0.685327, 0.656984, 0.668693, 0.650092, 0.662451 | 0.662709 |
+
+That is a 19.17% local reduction, not a prediction of the scoring CPU's gain.
+The phrase-only experiment initially measured 0.795288 → 0.707241 s. Local
+benchmarks do not measure the official cgroup peak or formatted source penalty;
+the board must confirm the resulting K before the change is considered a win.
+
+Correctness: full seed-1 output remains
+`f86973c210228141bcb6f1f1b10188ad2a9b65f71e7cd7cf4590b38de4e80927`;
+official seed-2 sample remains
+`86b92e3ceda664396bad5cabc3809b447de0610282eee484605fd23cbd12fea6`;
+official seed-17 tiny matches its reference
+`e67d694cae7b8a126e3931c7dbc74cdf91d655fcf0eafb31da3fc02546166079`.
+A separate byte-regex oracle checks 2,500 mixed queries, repeated terms, absent
+terms, token prefixes, 32-byte terms, uppercase, punctuation and non-ASCII bytes
+with the actual sandboxed image (`python3 -m unittest discover -s tests -v`).
