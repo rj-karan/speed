@@ -15,6 +15,7 @@ Every step from the reference to your final version, each with the live-board ru
 | 8 | Packed integer parsing | `af43e3f` | run-078fb2108046 | 0.061212 | 22.888 | 362 | 22.322696 | 67.437332 |
 | 9 | Unchanged-source confirmation | `1311354` | run-d480ecba4541 | 0.059338 | 23.093 | 362 | 22.632094 | 67.736237 |
 | 10 | SIMD quote search and smaller working set | `9c8f98c` | run-4dda2a32142b | 0.051579 | 13.193 | 377 | 26.985886 | 71.556834 |
+| Follow-up | Unchanged binary; formatting/comments confirmation | `a3babda` | run-ab1dcf6dda0c | 0.051316 | 12.657 | 377 | 27.280554 | 71.792660 |
 
 Local `check.py` passed the official seed-1 full output hash
 `d8088b1cd42ba1338b1345b107b55db7b96ef1f5066f3ff64fd26a8912a0f536`.
@@ -166,3 +167,17 @@ Static/native C++ measured 0.041202 -> 0.040294 s but local peak rose from
 selected build. The submitted C++ algorithm remains the confirmed SIMD/compact
 working-set implementation. LLVM formatting and publication comments preserve
 its generated binary in the local build.
+
+
+Official follow-up at `a3babda`: all gates passed. Unchanged binary; formatting/comments confirmation.
+
+## Official Rust trial requested
+
+At the team's request, the zero-crate Rust port is now submitted for a direct
+scoring-host comparison. It preserves the confirmed C++ algorithm: mapped CSV,
+bounded AVX2 quote discovery, exact cents, shared immutable name keys published
+with acquire/release, exact equality and atomic country membership. The pinned
+offline Rust build passes the public full expected hash, generated full seed 42,
+sample seed 7, tiny seed 17 and the independent CSV oracle. Local timing ties do
+not decide this trial; its official T/M/S/K will decide retention. The last C++
+source and its 71.792660-point confirmation are preserved at a3babda.

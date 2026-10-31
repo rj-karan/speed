@@ -14,6 +14,7 @@ Every step from the reference to your final version, each with the live-board ru
 | 7 | BFS layout, shared build cursors and packed state | `934d875` | run-70a2baae990f | 0.668657 | 229.573 | 345 | 10.010806 | 50.023453 |
 | 8 | Unchanged-source confirmation | `1311354` | run-0dc8e32bc8be | 0.649563 | 228.651 | 345 | 10.165050 | 50.355475 |
 | 9 | Unchanged-source confirmation | `9c8f98c` | run-3789c40c96ef | 0.620974 | 228.958 | 345 | 10.393619 | 50.838341 |
+| Follow-up | Formatting and diagnostic clarification | `a3babda` | run-0161d035bc9d | 0.625906 | 229.290 | 347 | 10.340621 | 50.727332 |
 
 Local `check.py` passed the official seed-1 full output hash
 `a23dbdf0a3e49cc8901310a9ee1dc6a9a569a85297b6da75c2a7002cb2ed277e`.
@@ -125,3 +126,6 @@ shell-wrapped peak rose from 229,388,288 to 229,781,504 bytes. It was rejected.
 The selected build remains unchanged. The follow-up applies LLVM formatting,
 explains packed parsing/publication invariants, and reports why an input exceeding
 the 53-bit distance bound would be rejected. No new algorithm gain is claimed.
+
+
+Official follow-up at `a3babda`: all gates passed. Formatting and diagnostic clarification.

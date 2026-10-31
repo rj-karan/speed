@@ -19,6 +19,7 @@ Every step from the reference to your final version, each with the live-board ru
 | 12 | Rejected single-pass memory/source trade-off | `934d875` | run-79c5144df686 | 0.044225 | 26.599 | 345 | 31.493662 | 74.911158 |
 | 13 | Restore higher-K hour-local source | `1311354` | run-7a33af9abbe9 | 0.046758 | 23.802 | 323 | 31.628157 | 75.003694 |
 | 14 | Unchanged-source confirmation | `9c8f98c` | run-24951b257cd0 | 0.046647 | 23.544 | 323 | 31.734877 | 75.076841 |
+| Follow-up | Rejected static/calendar trial; restoring previous build and arithmetic | `a3babda` | run-e30fa8549d30 | 0.051866 | 23.163 | 325 | 30.166297 | 73.976100 |
 
 Local `check.py` passed the official seed-1 full output hash
 `495ca09682b9673ef836a506496177680bb4a3af54255174befddb1f83481cd3`.
@@ -130,3 +131,7 @@ static-linked mean 0.036142 s. Separate shell-wrapped peaks were 24,297,472 and
 The submitted follow-up retains native tuning, names the fixed calendar window
 from spec section 2.1, improves allocation diagnostics, and applies LLVM format.
 The public full hash and independent hour/quantile oracle pass.
+
+
+Official follow-up at `a3babda`: all gates passed. Rejected static/calendar trial; restoring previous build and arithmetic.
+The local static-link result did not transfer to the scoring host: 73.976100 points versus the prior 75.076841. The static build is reverted, and the original direct hour-offset calculation is expressed with named constants. No score gain is attributed to readability changes.

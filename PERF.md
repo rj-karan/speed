@@ -17,10 +17,11 @@ All gates passed at `9c8f98c`. These are machine points, before judging.
 | C | run-4dda2a32142b | 0.051579 | 13,193,216 | 377 | 26.985886 | 71.556834 |
 | D | run-3789c40c96ef | 0.620974 | 228,958,208 | 345 | 10.393619 | 50.838341 |
 
-The follow-up adds smaller B postings, static linking in A, named A calendar
+The measured follow-up added smaller B postings and a rejected A static build.
+The next trial restores A's dynamic build and direct hour offsets, names A calendar
 constants, bounded B document-header scanning, diagnostic errors, algorithm and
-publication comments, and LLVM formatting. C's generated runtime binary stays
-identical after formatting/comments. Performance changes require a fresh board
+publication comments, and LLVM formatting. The C++ C binary stayed identical after formatting/comments; a direct Rust
+scoring-host trial now follows, with the C++ comparison preserved at a3babda. Performance changes require a fresh board
 confirmation; these baseline figures are not attributed to them.
 
 ## Validation

@@ -43,7 +43,8 @@ def main():
     images = {t: subprocess.check_output(
         ["docker", "image", "inspect", "--format={{.Id}}", "speeddemon-check/track-" + t],
         text=True).strip() for t in args.tracks}
-    reports = []
+    report_path = root / "report.json"
+    reports = json.loads(report_path.read_text()) if args.reuse and report_path.exists() else []
     for seed in args.seeds:
         for track in args.tracks:
             script, output = TASKS[track]
@@ -90,9 +91,11 @@ def main():
                 manifest.write_text(json.dumps(report, indent=2) + "\n")
                 if (repeat + 1) % 5 == 0 or repeat + 1 == args.repeats:
                     print(f"seed {seed} track {track}: {repeat + 1}/{args.repeats} hashes match", flush=True)
+            reports = [r for r in reports if (r["seed"], r["track"]) != (seed, track)]
             reports.append(report)
-            (root / "report.json").write_text(json.dumps(reports, indent=2) + "\n")
-    print(f"PASS: {len(reports)} full datasets, {len(reports) * args.repeats} sandbox runs", flush=True)
+            report_path.write_text(json.dumps(reports, indent=2) + "\n")
+    total_runs = sum(r["passed_repetitions"] for r in reports)
+    print(f"PASS: {len(reports)} full datasets, {total_runs} sandbox runs", flush=True)
 
 
 if __name__ == "__main__":

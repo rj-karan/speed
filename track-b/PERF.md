@@ -18,6 +18,7 @@ Every step from the reference to your final version, each with the live-board ru
 | 11 | Block tokenization and batched lookup | `e51a4bd` | run-3550441bc92b | 0.651392 | 96.125 | 530 | 13.355666 | 56.283277 |
 | 12 | Unchanged-source confirmation | `1311354` | run-92631bd3cc69 | 0.635049 | 95.687 | 530 | 13.538797 | 56.579004 |
 | 13 | Unchanged-source confirmation | `9c8f98c` | run-a8a26830f3fb | 0.646041 | 95.814 | 530 | 13.419566 | 56.386923 |
+| Follow-up | Confirmed compact worker-relative postings | `a3babda` | run-f7c72f2f389f | 0.627526 | 71.049 | 546 | 14.390926 | 57.904436 |
 
 Local `check.py` passed the official seed-1 full output hash
 `f86973c210228141bcb6f1f1b10188ad2a9b65f71e7cd7cf4590b38de4e80927`.
@@ -197,3 +198,7 @@ versus 96.3 MB. These local figures are not official score claims. A static/nati
 version was slower (0.484024 s), so the existing x86-64-v3 dynamic build stays.
 Full public output and the independent query oracle pass; additional full seeds
 are being checked before finalizing the release.
+
+
+Official follow-up at `a3babda`: all gates passed. Confirmed compact worker-relative postings.
+`run-f7c72f2f389f` measured 0.627526 s, 71,049,216 bytes, S=546 and K=14.390926: **57.904436 points**. Compared with unchanged-source `9c8f98c`, memory fell 25.8%, time fell 2.9%, and the combined coefficient improved.

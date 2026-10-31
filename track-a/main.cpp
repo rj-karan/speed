@@ -63,8 +63,10 @@ struct Worker {
 };
 static inline unsigned hour(const char *p) {
   unsigned h = (p[11] - '0') * 10 + p[12] - '0';
-  unsigned day = p[6] == '0' ? (p[9] == '0' ? 0 : 1) : (p[9] == '1' ? 2 : 3);
-  return day * 24 + h - SPAN_START_HOUR;
+  return h + (p[6] == '0' ? (p[9] == '0' ? -int(SPAN_START_HOUR)
+                                         : int(24 - SPAN_START_HOUR))
+                          : (p[9] == '1' ? int(48 - SPAN_START_HOUR)
+                                         : int(72 - SPAN_START_HOUR)));
 }
 static inline const char *endpoint(const char *p) {
   p += 28;
