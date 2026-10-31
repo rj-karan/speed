@@ -33,9 +33,26 @@ struct Dictionary {
         slots[pos] = e; names.push_back(e); return e.id;
     }
 };
-struct __attribute__((packed)) Record { uint32_t value; uint16_t id; };
-using Range = pair<const char *, const char *>;
-struct Worker { vector<Range> ranges[HOURS]; };
+struct __attribute__((packed)) Record { uint32_t value; uint16_t key; };
+struct Rows {
+    Record *data; size_t size = 0, capacity = 65536;
+    Rows() { data = static_cast<Record *>(mmap(nullptr, capacity * sizeof(Record), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)); if (data == MAP_FAILED) std::exit(1); }
+    Rows(const Rows &) = delete;
+    Rows &operator=(const Rows &) = delete;
+    ~Rows() { munmap(data, capacity * sizeof(Record)); }
+    void push_back(Record value) {
+        if (size == capacity) {
+            void *next = mremap(data, capacity * sizeof(Record), capacity * 2 * sizeof(Record), MREMAP_MAYMOVE);
+            if (next == MAP_FAILED) std::exit(1);
+            data = static_cast<Record *>(next); capacity *= 2;
+        }
+        data[size++] = value;
+    }
+    const Record *begin() const { return data; }
+    const Record *end() const { return data + size; }
+};
+struct Hour { Rows rows; uint32_t counts[KEYS]{}; };
+struct Worker { Dictionary keys; unique_ptr<Hour> hours[HOURS]; uint16_t global[KEYS]{}; };
 static inline unsigned hour(const char *p) {
     unsigned h = (p[11] - '0') * 10 + p[12] - '0';
     return h + (p[6] == '0' ? (p[9] == '0' ? -18 : 6) : (p[9] == '1' ? 30 : 54));
@@ -112,72 +129,70 @@ int main() {
     }
     vector<unique_ptr<Worker>> states;
     for (unsigned i = 0; i < workers; ++i) states.push_back(make_unique<Worker>());
+    Dictionary global;
+    vector<uint16_t> order;
     vector<Output> output(HOURS);
     atomic<unsigned> next_hour{0};
     barrier sync(workers);
     vector<thread> threads;
     for (unsigned w = 0; w < workers; ++w) threads.emplace_back([&, w] {
         Worker &local = *states[w];
-        const char *line = bounds[w], *scan = line, *finish = bounds[w + 1], *run = line;
-        unsigned previous = HOURS;
-        auto boundary = [&](const char *newline) {
-            unsigned h = hour(line);
-            if (h != previous) {
-                if (previous != HOURS) local.ranges[previous].emplace_back(run, line);
-                previous = h; run = line;
-            }
-            line = newline + 1;
-        };
-        // Discover all contiguous hour runs, even when hours arrive out of order.
-        while (finish - scan >= 32) {
-            __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(scan));
-            unsigned mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(bytes, _mm256_set1_epi8('\n')));
-            while (mask) { unsigned bit = __builtin_ctz(mask); boundary(scan + bit); mask &= mask - 1; }
-            scan += 32;
+        const char *p = bounds[w], *finish = bounds[w + 1];
+        while (p < finish) {
+            unsigned h = hour(p); const char *ep = endpoint(p);
+            auto [len, hash] = key(ep, base + st.st_size);
+            uint16_t id = local.keys.intern(base, ep, len, hash);
+            p = ep + len + 1;
+            bool error = *p == '5'; p += 4;
+            uint32_t value = latency(p, base + st.st_size, true);
+            if (!local.hours[h]) local.hours[h] = make_unique<Hour>();
+            local.hours[h]->rows.push_back({value, uint16_t(id | (error ? 32768 : 0))});
+            ++local.hours[h]->counts[id];
         }
-        while (scan < finish) { if (*scan == '\n') boundary(scan); ++scan; }
-        if (previous != HOURS) local.ranges[previous].emplace_back(run, finish);
         sync.arrive_and_wait();
-        for (;;) {
-            unsigned h = next_hour.fetch_add(1, memory_order_relaxed); if (h >= HOURS) break;
-            Dictionary dict;
-            uint32_t counts[KEYS]{}, errors[KEYS]{}, offsets[KEYS + 1], cursors[KEYS];
-            vector<Record> rows; rows.reserve(65536);
-            for (auto &state : states) for (const auto &[start, end] : state->ranges[h]) {
-                const char *p = start;
-                while (p < end) {
-                    const char *ep = endpoint(p);
-                    auto [len, hash] = key(ep, base + st.st_size);
-                    uint16_t id = dict.intern(base, ep, len, hash);
-                    p = ep + len + 1;
-                    bool error = *p == '5'; p += 4;
-                    uint32_t value = latency(p, base + st.st_size, true);
-                    rows.push_back({value, id}); ++counts[id]; errors[id] += error;
-                }
+        if (w == 0) {
+            for (auto &state : states) for (const Entry &e : state->keys.names) {
+                uint16_t id = global.intern(base, base + e.offset, e.length, e.hash);
+                state->global[e.id] = id;
             }
-            offsets[0] = 0;
-            for (size_t i = 0; i < KEYS; ++i) offsets[i + 1] = offsets[i] + counts[i];
-            copy(offsets, offsets + KEYS, cursors);
-            unique_ptr<uint32_t[]> values_by_group(new uint32_t[rows.size()]);
-            for (const Record &row : rows) values_by_group[cursors[row.id]++] = row.value;
-            vector<uint16_t> order;
-            for (const Entry &e : dict.names) order.push_back(e.id);
+            for (const Entry &e : global.names) order.push_back(e.id);
             sort(order.begin(), order.end(), [&](uint16_t a, uint16_t b) {
-                const Entry &x = dict.names[a], &y = dict.names[b];
+                const Entry &x = global.names[a], &y = global.names[b];
                 return string_view(base + x.offset, x.length) < string_view(base + y.offset, y.length);
             });
+        }
+        sync.arrive_and_wait();
+        vector<uint32_t> combined;
+        uint32_t counts[KEYS], offsets[KEYS + 1], cursors[KEYS], errors[KEYS];
+        for (;;) {
+            unsigned h = next_hour.fetch_add(1, memory_order_relaxed); if (h >= HOURS) break;
             char timestamp[24];
             unsigned m = h < 30 ? 10 : 11, d = h < 6 ? 30 : h < 30 ? 31 : h < 54 ? 1 : 2;
             unsigned clock = h < 6 ? h + 18 : h < 30 ? h - 6 : h < 54 ? h - 30 : h - 54;
             snprintf(timestamp, sizeof timestamp, "2026-%02u-%02uT%02u:00:00Z", m, d, clock);
-            Output &buf = output[h]; buf.capacity = max(size_t(1), dict.names.size() * 224);
+            fill(begin(counts), end(counts), 0); fill(begin(errors), end(errors), 0);
+            for (auto &state : states) if (state->hours[h])
+                for (const Entry &e : state->keys.names) counts[state->global[e.id]] += state->hours[h]->counts[e.id];
+            offsets[0] = 0;
+            for (size_t i = 0; i < KEYS; ++i) offsets[i + 1] = offsets[i] + counts[i];
+            copy(offsets, offsets + KEYS, cursors);
+            combined.resize(offsets[KEYS]);
+            for (auto &state : states) if (state->hours[h]) {
+                for (const Record &row : state->hours[h]->rows) {
+                    uint16_t id = state->global[row.key & 32767];
+                    combined[cursors[id]++] = row.value; errors[id] += row.key >> 15;
+                }
+                state->hours[h].reset();
+            }
+            Output &buf = output[h]; buf.capacity = max(size_t(1), global.names.size() * 224);
             buf.data = static_cast<char *>(mmap(nullptr, buf.capacity, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
             if (buf.data == MAP_FAILED) std::exit(1);
             char *cursor = buf.data;
             for (uint16_t id : order) {
-                uint32_t n = counts[id]; uint64_t error = errors[id];
-                uint32_t values[3]; percentiles(values_by_group.get() + offsets[id], n, values);
-                const Entry &e = dict.names[id];
+                uint32_t n = counts[id]; if (!n) continue;
+                uint64_t error = errors[id];
+                uint32_t values[3]; percentiles(combined.data() + offsets[id], n, values);
+                const Entry &e = global.names[id];
                 memcpy(cursor, timestamp, 20); cursor += 20; *cursor++ = ' ';
                 memcpy(cursor, base + e.offset, e.length); cursor += e.length;
                 uint64_t fields[] = {n, values[0], values[1], values[2], error, error * 1000000 / n};

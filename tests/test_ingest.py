@@ -59,3 +59,9 @@ class IngestCorrectness(unittest.TestCase):
             stamp = start + datetime.timedelta(hours=h)
             expected.append(f'{stamp:%Y-%m-%dT%H}:00:00Z {path} ' + ' '.join(map(str, [n, *quantiles, errors, errors * 1000000 // n])) + '\n')
         self.assertEqual(self.run_image(''.join(lines).encode()), ''.join(expected).encode())
+
+    def test_record_buffer_growth(self):
+        # More than 65,536 records per worker forces the mapped buffer to grow.
+        row = b"2026-10-30T18:00:00.000000Z GET / 503 7\n"
+        self.assertEqual(self.run_image(row * 800000),
+                         b"2026-10-30T18:00:00Z / 800000 7 7 7 800000 1000000\n")

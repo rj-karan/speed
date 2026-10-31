@@ -47,3 +47,18 @@ class TraverseCorrectness(unittest.TestCase):
                            check=True, timeout=60)
             self.assertEqual(sorted(p.name for p in out.iterdir()), ['distances.txt'])
             self.assertEqual((out / 'distances.txt').read_bytes(), ('\n'.join(expected) + '\n').encode())
+
+    def test_generation_wrap_and_64_bit_distance(self):
+        with tempfile.TemporaryDirectory(prefix='speed-traverse-wrap-') as tmp:
+            root = Path(tmp); root.chmod(0o755)
+            data, out = root / 'data', root / 'out'
+            data.mkdir(); out.mkdir(); out.chmod(0o777)
+            (data / 'graph.txt').write_text('3 2\n0 1 4294967295\n1 2 4294967295\n')
+            (data / 'queries.txt').write_text('0 2\n' * 10000)
+            subprocess.run(['docker', 'run', '--rm', '--network=none', '--read-only',
+                            '--cap-drop=ALL', '--security-opt=no-new-privileges', '--user', '65534:65534',
+                            '--memory=8g', '--memory-swap=8g', '--pids-limit=512',
+                            '-v', str(data) + ':/data:ro', '-v', str(out) + ':/out:rw',
+                            os.environ.get('SPEED_D_IMAGE', 'speeddemon-check/track-d')],
+                           check=True, timeout=60)
+            self.assertEqual((out / 'distances.txt').read_bytes(), b'8589934590\n' * 10000)

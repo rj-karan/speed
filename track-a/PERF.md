@@ -82,3 +82,22 @@ published generator's seed-17 sample. Five alternating full-data runs gave
 0.036724 s without PGO and 0.036759 s with it; every output hash matched. No
 measurable gain justified changing the build. The experimental binary and
 training data are not part of the submitted runtime image.
+
+## Single pass plus explicit record reclamation (board confirmation pending)
+
+Remove the full-input hour-run discovery scan. Workers parse byte ranges once
+into private hour-specific six-byte records, then merge only endpoint catalogs.
+Mapped record buffers grow when necessary and are released as each hour is
+consumed. This avoids the allocator-retention cost of the earlier rejected
+whole-input vector experiment. Output remains explicitly mapped and reclaimed.
+
+Five alternating full-data process runs on six Ryzen cores plus SMT measured
+0.035522 s before and 0.030745 s after (13.4% reduction). One local peak check
+measured 26,808,320 bytes; this trades some memory for time, so official K must
+confirm the choice. All output hashes matched. Full public input, the official
+seed-17 sample, and independent oracles including 800,000 duplicate lines (forcing
+mapping growth) pass. No score is claimed from these local timings.
+
+A compact private endpoint-byte pool was also tried: it passed correctness but
+slowed 0.031074 -> 0.032108 s locally, so it was rejected. The extra PGO build
+again showed no measurable benefit on the selected code.

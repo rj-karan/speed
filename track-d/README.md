@@ -1,30 +1,36 @@
-# Track D: sparse bidirectional Dijkstra
+# Track D: locality-aware bidirectional Dijkstra
 
-Parse the graph into forward and reverse CSR arrays using four workers. Each
-query uses exact 64-bit bidirectional Dijkstra, stopping when the two frontier
-bounds meet the best discovered route. Preserve zero-weight, duplicate,
-parallel and directed edges. Reject impossible endpoints early, and answer
-identical endpoints with zero. No heuristic changes path lengths.
+## Approach
 
-Each frontier uses a 65-bucket integer radix heap. Nonnegative weights guarantee
-monotone extracted costs; redistributing a bucket moves its items into lower
-buckets. Exact stale-entry checks remain in place. Full-node distance arrays use
-generation stamps to avoid clearing between queries. Four workers answer
-independent queries, and output is written in input order. Generation wrap
-clears stamps explicitly. The CSR cursor loop also stops at u < n, avoiding an
-out-of-bounds degree read at the sentinel.
+Twelve workers count forward/reverse degrees in shared atomic arrays, then reuse
+those arrays as CSR write cursors. Atomic increments assign disjoint output
+positions; joining the builders completes each phase before the next begins.
+Shared counters avoid replicated per-worker degree/cursor arrays.
 
-An eight-worker sparse-state experiment was rejected: although faster, peak
-memory rose to roughly 546 MB locally, which hurt the combined coefficient.
+Renumber every vertex in breadth-first order and rebuild both CSR arrays in that
+order. Remap all query endpoints with the same bijection. Every directed edge,
+weight, duplicate, parallel edge and isolated node is retained; the transformation
+changes only memory layout. All preprocessing is inside the timed run.
 
-## Dependencies and validation
+Four workers answer queries with exact bidirectional Dijkstra and monotone radix
+heaps. A uint64 state word stores an exact 53-bit distance and an 11-bit query
+stamp. For every published scale, n*UINT32_MAX is below 2^53, including one extra
+relaxation edge. The constructor checks that bound. Stamps are explicitly cleared
+at wraparound. This reduces memory traffic without truncating path sums.
 
-No non-standard-library runtime dependencies (D = 1). The full public output,
-official seed-17 tiny reference, and an independent heapq oracle covering
-unreachable, repeated, zero-weight and >32-bit distances match.
+## Research and verification
+
+[PHAST's authors](https://www.microsoft.com/en-us/research/wp-content/uploads/2010/09/phastTR.pdf)
+discuss how vertex order affects shortest-path locality. We implemented and timed
+both DFS and BFS numbering ourselves; BFS won on this generator, including its
+preprocessing cost. No routing or shortest-path library is used.
+
+Full public output, official seed-7 sample and seed-17 tiny reference outputs,
+and an independent heapq oracle match. A 10,000-query fixture forces stamp
+wraparound and checks sums above uint32. Unreachable, zero-weight, duplicate and
+directed cases remain exact. No non-standard-library runtime dependencies (D=1).
 
 ## With another 24 hours
 
-Measure compact edge encoding and radix-bucket allocation on the scoring CPU.
-Keep exact fallback storage for unusually large weights and compare total
-preprocessing cost, search time and kernel peak memory.
+Investigate compressed edge storage with exact handling of exceptional weights,
+and measure whether it repays its encoding/preprocessing and source-size costs.

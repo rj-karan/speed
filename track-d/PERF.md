@@ -70,3 +70,37 @@ PGO gain is claimed. The latest radix-only confirmation, `run-47c645bff20d` at
 `af43e3f`, passed with 1.047887 s, 279,580,672 bytes, S=312, K=7.804513 and
 44.617289 points. This varies from the earlier run of unchanged code and is not
 attributed to another algorithm change.
+
+## Research-led layout and build redesign (board confirmation pending)
+
+Research: the authors' PHAST report discusses vertex numbering and cache
+locality: https://www.microsoft.com/en-us/research/wp-content/uploads/2010/09/phastTR.pdf
+Our implementation does not use their software or a routing library. It tests
+simple runtime numbering and includes all reordering cost in the measured run.
+
+Five-run alternating local full-data process comparisons:
+
+| Candidate | Baseline middle-three mean | Candidate middle-three mean |
+|---|---:|---:|
+| DFS numbering | 1.260434 s | 0.906840 s |
+| BFS numbering | 1.256420 s | 0.828045 s |
+| BFS + packed distance/stamp | 1.265630 s | 0.836891 s |
+| Packed parsing + reuse degree buffers | 1.263879 s | 0.804635 s |
+| Shared counters, 12 build workers, BFS, packed state/parser | 1.270298 s | 0.650235 s |
+
+All runs matched the full public hash. The selected final candidate reduced local
+process time 48.8% against the submitted baseline, including graph build,
+renumbering, searches and output. Its local shell-wrapped cgroup peak was
+229,085,184 bytes. Packed state was retained for its lower memory footprint,
+not a claim that it independently improved runtime.
+
+The selected implementation uses 53 distance bits and eleven generation bits;
+n*UINT32_MAX < 2^53 on all published scales. A 10,000-query independent fixture
+forces wraparound and checks two UINT32_MAX edges sum to 8,589,934,590. Official
+seed-7 sample matches `88bf36c94620505d1beafe7cd56a08dc2d261b71f9824d2f764d5ce6e5d7872e`;
+seed-17 tiny and the independent random-graph oracle also match.
+
+Native/PGO training on the new candidate was tested and rejected: 0.648752 ->
+0.647854 s locally was indistinguishable from noise. The training generator,
+profiles, generated training data and rejected candidates are not submitted.
+Official run ID, peak and K are pending; local timings are not official scores.
