@@ -7,6 +7,7 @@ Every step from the reference to your final version, each with the live-board ru
 | 0 | The reference, unchanged | | 72.69 | 893 | 0 |
 | 1 | Use forward and reverse CSR for bidirectional 64-bit Dijkstra with stamped distances | run-f48fbd5429aa | 5.264194 | 137.60 | 32.31 |
 | 2 | Process independent queries on six workers with one search state per worker | run-c2344a47e783 | 1.707945 | 348.94 | 40.07 |
+| 3 | Parallel 4-thread CSR graph build, 4-ary QuadHeap for bidirectional search, and 16-bit generation stamps | pending board ID | pending | pending | pending |
 
 Local `check.py` passed the official seed-1 full output hash
 `a23dbdf0a3e49cc8901310a9ee1dc6a9a569a85297b6da75c2a7002cb2ed277e`.
