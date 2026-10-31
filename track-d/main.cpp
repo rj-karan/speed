@@ -33,7 +33,7 @@ struct Edge { uint32_t to, weight; };
 struct QuadHeap {
     struct Item { uint64_t cost; uint32_t node; };
     vector<Item> data;
-    QuadHeap() { data.reserve(16384); }
+    QuadHeap() { data.reserve(8192); }
     inline void clear() { data.clear(); }
     inline bool empty() const { return data.empty(); }
     inline Item top() const { return data[0]; }
@@ -195,7 +195,8 @@ int main() {
 
     vector<int64_t> answers(work.size());
     atomic<size_t> next_query{0};
-    const size_t QUERY_THREADS = 8;
+    // 4 query workers keep peak RAM well under 300MB on board
+    const size_t QUERY_THREADS = 4;
     vector<thread> q_threads;
     for (size_t t = 0; t < QUERY_THREADS; ++t) {
         q_threads.emplace_back([&] {
