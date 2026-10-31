@@ -62,3 +62,36 @@ the practice leaderboard do not establish a final placement.
 The [complete official context](https://speeddemon.dev/speed-demon-context.md)
 contains rules, scoring, track specifications, toolchain digests, clarifications,
 and submission requirements. The frozen specs and harness take precedence.
+
+## Dependencies
+
+Submitted A–D programs use only the C++ standard library and Linux system calls;
+all four manifests declare zero runtime package dependencies. The build uses the
+pinned GCC image and the runtime uses pinned Debian. The standalone Rust
+comparison in [experiments/track-c-rust](experiments/track-c-rust) uses Rust's
+standard library without crates and is outside the submitted track folders.
+
+## Additional-seed checks
+
+After building the four images with `check.py`, run independent full-scale seeds
+against an official checkout. This checks each output repeatedly under the event
+sandbox; it does not measure scoring performance:
+
+```sh
+python3 tools/validate_seeds.py --official /path/to/speed-demon-2026 --seeds 19 37 59 --repeats 20
+```
+
+Reports and inputs stay in ignored `data/holdouts/`; `--reuse` checks recorded
+input/reference hashes before using an existing case. Set `--cpus` to the twelve
+logical CPUs available locally. Repeated correct outputs test stability but do
+not prove the absence of races; independent oracles and publication invariants
+provide separate evidence.
+
+## Next steps
+
+Prioritize B's exact index construction and storage; benchmark time, peak memory
+and canonical source together. A's remaining target is temporary memory, while C
+needs more parser/lookup work to approach the leading times. D only contributes
+to the overall score after overtaking another counted track. Before freeze,
+repeat additional-seed checks on the submitted sources, confirm all official
+gates, and retain measured improvements. See [PERF.md](PERF.md) for evidence.

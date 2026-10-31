@@ -1,5 +1,6 @@
 """Independent aggregation oracle for hostile CSV and packed integer parsing."""
 from pathlib import Path
+import os
 import random
 import subprocess
 import tempfile
@@ -52,6 +53,6 @@ class JoinCorrectness(unittest.TestCase):
                             '--security-opt=no-new-privileges', '--user', '65534:65534',
                             '--memory=8g', '--memory-swap=8g', '--pids-limit=512',
                             '-v', str(data) + ':/data:ro', '-v', str(out) + ':/out:rw',
-                            'speeddemon-check/track-c'], check=True, timeout=60)
+                            os.environ.get('SPEED_C_IMAGE', 'speeddemon-check/track-c')], check=True, timeout=60)
             self.assertEqual(sorted(p.name for p in out.iterdir()), ['aggregates.txt'])
             self.assertEqual((out / 'aggregates.txt').read_bytes(), ''.join(expected).encode())

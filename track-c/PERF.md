@@ -2,14 +2,19 @@
 
 Every step from the reference to your final version, each with the live-board run ID that measured it. Judges check that the run IDs exist and that each change moved the way you say it did.
 
-| Step | Change | Run ID | T (s) | M (MB) | Points |
-|---|---|---|---|---|---|
-| 0 | The reference, unchanged | | 14.44 | 367 | 0 |
-| 1 | Replace per-record Python objects with a mapped CSV parser, indexed join, and globally interned names with country membership bits | run-9f1d47d29d62 | 0.906522 | 12.34 | 42.51 |
-| 2 | Store each distinct name in a compact open-addressed table, retaining bytewise equality checks | run-4bba7972a60f | 0.577201 | 9.91 | 48.01 |
-| 3 | Parse three record-aligned ranges in parallel and merge name membership masks | run-a04bbae35fdc | 0.319128 | 23.0 | 49.91 |
-| 4 | Store each name's hash in its dedup slot and prefetch the slot right after the name is parsed | run-851a9e87bcce | 0.225056 | 26.1 | 53.04 |
-| 5 | Single lock-free global atomic 262k-slot open-addressed table with atomic bitwise fetch_or country tracking across 12 threads | run-be3c6c1fdad8 | 0.083043 | 22.31 | 64.61 |
+| Step | Change/status | Commit | Run ID | T (s) | M (MB, decimal) | S | K | Points |
+|---|---|---|---|---|---|---|---|---|
+| 0 | Reference (published rounded axes) | — | — | 14.44 | 367 | — | 1 | 0 |
+| 1 | Replace per-record Python objects with a mapped CSV parser, indexed join, and globally interned names with country membership bits | `d31be19` | run-9f1d47d29d62 | 0.906522 | 12.341 | 218 | 7.082148 | 42.508251 |
+| 2 | Store each distinct name in a compact open-addressed table, retaining bytewise equality checks | `0ebeb13` | run-4bba7972a60f | 0.577201 | 9.908 | 243 | 9.124117 | 48.009542 |
+| 3 | Parse three record-aligned ranges in parallel and merge name membership masks | `7da67d5` | run-a04bbae35fdc | 0.319128 | 23.003 | 318 | 9.958422 | 49.909527 |
+| 4 | Store each name's hash in its dedup slot and prefetch the slot right after the name is parsed | `c50790e` | run-851a9e87bcce | 0.225056 | 26.137 | 329 | 11.500588 | 53.036003 |
+| 5 | Single lock-free global atomic 262k-slot open-addressed table with atomic bitwise fetch_or country tracking across 12 threads | `060f342` | run-be3c6c1fdad8 | 0.083043 | 22.307 | 323 | 19.596345 | 64.608753 |
+| 6 | Global interning before compact slots | `35c44e9` | run-f255ee6ba678 | 0.770184 | 12.521 | 218 | 7.661216 | 44.214884 |
+| 7 | Inline prefixes and bounded quote search | `1a14f38` | run-2134f4a745f2 | 0.063414 | 22.934 | 342 | 22.110772 | 67.230195 |
+| 8 | Packed integer parsing | `af43e3f` | run-078fb2108046 | 0.061212 | 22.888 | 362 | 22.322696 | 67.437332 |
+| 9 | Unchanged-source confirmation | `1311354` | run-d480ecba4541 | 0.059338 | 23.093 | 362 | 22.632094 | 67.736237 |
+| 10 | SIMD quote search and smaller working set | `9c8f98c` | run-4dda2a32142b | 0.051579 | 13.193 | 377 | 26.985886 | 71.556834 |
 
 Local `check.py` passed the official seed-1 full output hash
 `d8088b1cd42ba1338b1345b107b55db7b96ef1f5066f3ff64fd26a8912a0f536`.
@@ -55,7 +60,7 @@ removes the serial name-merge phase. The board measured peak cgroup memory of
 The seed-2 sample generated from the published generator also matched its Python
 reference output hash `f389938275df1b495a38c4375fe741795df180e64617e01e2cf77a95a56982a3`.
 
-## Inline name prefixes and vectorized quote search (board confirmation pending)
+## Inline name prefixes and vectorized quote search (officially confirmed below)
 
 Each 64-byte name slot now stores a 16-byte prefix and a 32-bit CSV offset.
 Short-name equality stays in the table's cache line; long names still compare
@@ -67,8 +72,8 @@ quotes using bounded memchr, retaining escape and embedded-newline semantics.
 Five alternating local process runs on the full public data: previous
 middle-three mean 0.066621 s; new 0.041007 s (38.4% reduction). The full public
 hash and official seed-17 tiny reference hash match. This is local timing;
-no official score is claimed yet, and peak memory/source cost must be weighed
-in the board result.
+these local timings are not official scores. The confirmation below includes
+the scoring host's memory/source cost.
 
 An additional official seed-7 sample reference also matches:
 `4a8b5533b3639d52e4bb82e622c0a03c071e3e4f7ea62c42fcb716d373602958`.
@@ -77,7 +82,7 @@ Official confirmation for the inline-prefix version: `run-2134f4a745f2` at
 `1a14f38` measured 0.063414 s, 22,933,504 bytes, S=342, K=22.110772 and
 67.230195 points. All gates passed.
 
-## Packed integer parsing (board confirmation pending)
+## Packed integer parsing (officially confirmed below)
 
 Use bounded eight-byte integer parsing for record IDs, region IDs and amount
 whole parts. A SWAR mask locates the first non-digit; packed decimal reduction
@@ -106,7 +111,7 @@ full-data runs measured 0.050499 s without it and 0.056448 s with PGO/native
 tuning. All hashes matched, but the candidate was slower.
 
 
-## Bounded SIMD fields and a smaller shared working set (official run pending)
+## Bounded SIMD fields and a smaller shared working set (officially confirmed below)
 
 All seven public input files across A–D were rechecked against the authoritative
 SHA256SUMS.json; every input matched. The C candidate passed check.py with the
@@ -130,7 +135,7 @@ middle five: confirmed baseline 0.056144 s; final candidate 0.042343 s (24.6%
 less time). Every output hash matched. A separate shell-wrapped peak cgroup
 check measured 24,821,760 -> 13,250,560 bytes; this is local evidence, not the
 scoring host's peak. Other workloads on the local machine add timing noise;
-o official points are inferred from these measurements.
+No official points are inferred from these measurements.
 
 Rejected alternatives: buffering 16 name lookups did not improve on immediate
 lookup plus prefetch. Six and eight parser workers gave 0.054526 and 0.044613 s
@@ -138,3 +143,26 @@ versus 0.042343 s with twelve. Smaller tables and hash changes were also tested
 in isolation; the combined final candidate was selected by its measured time
 and memory. No Rust/C++ boundary or third-party parser is required for these
 operations; the submitted program remains C++ with zero dependencies.
+
+
+Official confirmation: `run-4dda2a32142b` at `9c8f98c` passed every gate:
+0.051579 s, 13,193,216 bytes, S=377, K=26.985886, **71.556834 points**.
+The previous unchanged implementation at `1311354` / `run-d480ecba4541` measured
+0.059338 s, 23,093,248 bytes, S=362 and 67.736237 points. Official time fell
+13.1% and peak memory 42.9%; this is a measured combined-score improvement.
+
+## Rust and static-link evaluations
+
+A zero-crate Rust port of the selected algorithm passes public full, generated
+full seed 42, sample seed 7, tiny seed 17 and the expanded independent oracle.
+The buildable candidate is in experiments/track-c-rust, outside the submission.
+Five interleaved local runs gave C++ 0.036943 s versus Rust 0.040764 s; a later
+batch gave 0.030957 versus 0.030941 s. No reproducible runtime gain was established.
+A Rust layout with immutable 32-byte name slots and a transposed country/name
+membership bitset also tied locally (0.031343 s). Neither is an official score.
+
+Static/native C++ measured 0.041202 -> 0.040294 s but local peak rose from
+13,520,896 to 14,229,504 bytes; no clear combined benefit justified changing the
+selected build. The submitted C++ algorithm remains the confirmed SIMD/compact
+working-set implementation. LLVM formatting and publication comments preserve
+its generated binary in the local build.

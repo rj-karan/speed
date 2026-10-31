@@ -2,13 +2,18 @@
 
 Every step from the reference to your final version, each with the live-board run ID that measured it. Judges check that the run IDs exist and that each change moved the way you say it did.
 
-| Step | Change | Run ID | T (s) | M (MB) | Points |
-|---|---|---|---|---|---|
-| 0 | The reference, unchanged | | 72.69 | 893 | 0 |
-| 1 | Use forward and reverse CSR for bidirectional 64-bit Dijkstra with stamped distances | run-f48fbd5429aa | 5.264194 | 137.60 | 32.31 |
-| 2 | Process independent queries on six workers with one search state per worker | run-c2344a47e783 | 1.707945 | 348.94 | 40.07 |
-| 3 | Parallel 4-thread CSR graph build, 4-ary QuadHeap, 16-bit generation stamps, 8 workers | run-f214f61af425 | 1.405876 | 413.58 | 39.74 |
-| 4 | Reduce query workers to 4 to cut peak memory below 300 MB while preserving 1.4s graph build and query throughput | run-b8eec44801f0 | 1.544531 | 271.41 | 40.54 |
+| Step | Change/status | Commit | Run ID | T (s) | M (MB, decimal) | S | K | Points |
+|---|---|---|---|---|---|---|---|---|
+| 0 | Reference (published rounded axes) | — | — | 72.69 | 893 | — | 1 | 0 |
+| 1 | Use forward and reverse CSR for bidirectional 64-bit Dijkstra with stamped distances | `d31be19` | run-f48fbd5429aa | 5.264194 | 137.597 | 162 | 4.427032 | 32.305634 |
+| 2 | Process independent queries on six workers with one search state per worker | `e7920ae` | run-c2344a47e783 | 1.707945 | 348.938 | 184 | 6.330213 | 40.070915 |
+| 3 | Rejected score regression: parallel 4-thread CSR graph build, 4-ary QuadHeap, 16-bit generation stamps, 8 workers | `1546aca` | run-f214f61af425 | 1.405876 | 413.581 | 311 | 6.233441 | 39.736394 |
+| 4 | Reduce query workers to 4 to cut peak memory below 300 MB while preserving 1.4s graph build and query throughput | `060f342` | run-b8eec44801f0 | 1.544531 | 271.413 | 311 | 6.469773 | 40.544452 |
+| 5 | Radix heap and CSR sentinel correction | `1a14f38` | run-a361068428ee | 1.144292 | 277.512 | 312 | 7.479621 | 43.693980 |
+| 6 | Unchanged-source confirmation | `af43e3f` | run-47c645bff20d | 1.047887 | 279.581 | 312 | 7.804513 | 44.617289 |
+| 7 | BFS layout, shared build cursors and packed state | `934d875` | run-70a2baae990f | 0.668657 | 229.573 | 345 | 10.010806 | 50.023453 |
+| 8 | Unchanged-source confirmation | `1311354` | run-0dc8e32bc8be | 0.649563 | 228.651 | 345 | 10.165050 | 50.355475 |
+| 9 | Unchanged-source confirmation | `9c8f98c` | run-3789c40c96ef | 0.620974 | 228.958 | 345 | 10.393619 | 50.838341 |
 
 Local `check.py` passed the official seed-1 full output hash
 `a23dbdf0a3e49cc8901310a9ee1dc6a9a569a85297b6da75c2a7002cb2ed277e`.
@@ -28,7 +33,7 @@ the speed and peak-memory trade-off.
 The board confirmed 1.707945 s and 348.94 MB for run-c2344a47e783. The extra
 memory cost was outweighed by the faster run: K rose from 4.43 to 6.33.
 
-## Radix heap and CSR sentinel fix (board confirmation pending)
+## Radix heap and CSR sentinel fix (officially confirmed below)
 
 Profiling the old implementation locally found graph construction around 311 ms
 and query evaluation around 1,499 ms. Replace the comparison heap with a monotone
@@ -49,7 +54,7 @@ peak, so the time win did not justify memory and extra source-size costs.
 The submitted radix-only version passes the full public hash, official seed-17
 tiny reference, and 1,150 independent heapq-oracle queries, including duplicate,
 parallel and zero-weight edges, isolated nodes and sums exceeding uint32.
-Official run ID and K remain pending.
+The official confirmation is recorded below.
 
 Official confirmation for the radix-only version: `run-a361068428ee` at
 `1a14f38` measured 1.144292 s, 277,512,192 bytes, S=312, K=7.479621 and
@@ -71,7 +76,7 @@ PGO gain is claimed. The latest radix-only confirmation, `run-47c645bff20d` at
 44.617289 points. This varies from the earlier run of unchanged code and is not
 attributed to another algorithm change.
 
-## Research-led layout and build redesign (board confirmation pending)
+## Research-led layout and build redesign (officially confirmed below)
 
 Research: the authors' PHAST report discusses vertex numbering and cache
 locality: https://www.microsoft.com/en-us/research/wp-content/uploads/2010/09/phastTR.pdf
@@ -103,7 +108,7 @@ seed-17 tiny and the independent random-graph oracle also match.
 Native/PGO training on the new candidate was tested and rejected: 0.648752 ->
 0.647854 s locally was indistinguishable from noise. The training generator,
 profiles, generated training data and rejected candidates are not submitted.
-Official run ID, peak and K are pending; local timings are not official scores.
+Local timings are not official scores; the official confirmation follows.
 
 Official confirmation `run-70a2baae990f` at `934d875` passed every gate:
 0.668657 s, 229,572,608 bytes, S=345, K=10.010806 and 50.023453 points. Against
@@ -112,3 +117,11 @@ from 44.617289 to 50.023453 despite source increasing from 312 to 345 lines.
 This confirms the layout/build/state change improved the official coefficient.
 D still remains below the three counted tracks; this improvement alone does
 not change the overall title score.
+
+## Build and readability evaluation
+
+A five-run local static/native comparison measured 0.719263 -> 0.723253 s;
+shell-wrapped peak rose from 229,388,288 to 229,781,504 bytes. It was rejected.
+The selected build remains unchanged. The follow-up applies LLVM formatting,
+explains packed parsing/publication invariants, and reports why an input exceeding
+the 53-bit distance bound would be rejected. No new algorithm gain is claimed.

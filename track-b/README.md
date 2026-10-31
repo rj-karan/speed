@@ -6,7 +6,11 @@ normalization or stopword removal is performed.
 
 The first corpus pass counts unique document occurrences per queried term. Allocate
 one exact contiguous posting array for rare terms and bitmaps for frequent terms,
-choosing whichever representation uses fewer bytes. The second pass fills these
+choosing whichever representation uses fewer bytes. Sparse IDs use two bytes
+relative to each worker's base. Segment ends reconstruct exact global IDs and
+limit phrase membership searches to the correct worker segment. At least four
+aligned ranges cover the specified maximum of 250,000 documents within 16 bits;
+a runtime guard checks the span. The second pass fills these
 arrays directly. Document ranges align to bitmap words, so workers write disjoint
 locations without atomics. This eliminates duplicated posting vectors and their
 serial concatenation. All allocations derive from current input, not cached data.
@@ -21,12 +25,13 @@ separators follow the frozen spec exactly. Output order follows query order.
 
 No non-standard-library runtime dependencies (D = 1). Full public hash, official
 seed-2 sample, seed-17 tiny reference, and the independent 2,500-query oracle pass.
-Local comparisons and pending official confirmation are recorded in PERF.md.
+Local comparisons, rejected candidates and official confirmations are in PERF.md.
 
 ## With another 24 hours
 
-Profile the two tokenization passes on the scoring CPU and test a direct lookup
-for frequent short words. Compare time, cgroup peak and formatted source cost.
+Profile alternatives to the second tokenize/hash pass while controlling temporary
+storage. Compare time, cgroup peak and formatted source cost; one-pass and
+anchor-directed prototypes have already failed that combined comparison.
 
 The tokenizer classifies 32-byte blocks and emits start/end transitions, carrying
 partial tokens across blocks and respecting the document tail. Sixteen-token

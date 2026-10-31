@@ -2,16 +2,23 @@
 
 Every step from the reference to your final version, each with the live-board run ID that measured it. Judges check that the run IDs exist and that each change moved the way you say it did.
 
-| Step | Change | Run ID | T (s) | M (MB) | Points |
-|---|---|---|---|---|---|
-| 0 | The reference, unchanged | | 32.05 | 228 | 0 |
-| 1 | Replace per-line Python date parsing with fixed-offset C++ parsing; intern endpoints and sort latency vectors only at output | run-28310cdd1a9c | 0.510158 | 35.21 | 50.10 |
-| 2 | Pure Rust rewrite (D=1): 12-thread parallel chunk parsing, open-addressing endpoint interning, global radix bucket scatter and parallel sort | run-bdc0f2095f6c | 0.0745 | 57.5 | 65.24 |
-| 3 | Lock-free atomic endpoint interning with thread-local cache, fused FNV-1a hash traversal, zero-reduction global atomic accumulators, parallel atomic scatter, and parallel multi-threaded formatting across 72 hour slots | run-bdc0f2095f6c | 0.0745 | 57.5 | 65.24 |
-| 4 | Persistent 12-worker thread pool with Barrier synchronization, 64-bit SWAR endpoint scanning, branchless method jumping, MAP_SHARED page-table bypass | run-7ba00dc18712 | 0.0544 | 50.4 | 69.06 |
-| 5 | Two-pass streaming scan completely eliminating items Vec<u64> allocations (saving >21 MB RAM), fused cache-resident group percentile extraction & output formatting | run-7912c18c175d | 0.0620 | 29.3 | 69.72 |
-| 6 | SWAR newline skipping in Pass 1, read-only zero-CAS endpoint lookup in Pass 2, and direct raw pointer summary formatting | run-f056314f934c | 0.0603 | 29.1 | 69.71 |
-| 7 | Thread-local non-atomic count/error arrays in Pass 1, parallel slot reduction, zero-alloc set_len for latency storage, lock-free thread-local range cursors in Pass 2 eliminating all atomic contention, L1 fast endpoint table lookup, and sorting network for N <= 16 | run-e9b9677c692d | 0.063711 | 30.95 | 68.04 |
+| Step | Change/status | Commit | Run ID | T (s) | M (MB, decimal) | S | K | Points |
+|---|---|---|---|---|---|---|---|---|
+| 0 | Reference (published rounded axes) | — | — | 32.05 | 228 | — | 1 | 0 |
+| 1 | Replace per-line Python date parsing with fixed-offset C++ parsing; intern endpoints and sort latency vectors only at output | `d31be19` | run-28310cdd1a9c | 0.510158 | 35.213 | 139 | 10.047510 | 50.102922 |
+| 2 | Pure Rust rewrite (D=1): 12-thread parallel chunk parsing, open-addressing endpoint interning, global radix bucket scatter and parallel sort | `4239bbb` | run-bdc0f2095f6c | 0.074484 | 57.545 | 423 | 20.170691 | 65.236039 |
+| 3 | Same measured state as preceding row; no separate improvement | `4239bbb` | run-bdc0f2095f6c | 0.074484 | 57.545 | 423 | 20.170691 | 65.236039 |
+| 4 | Persistent 12-worker thread pool with Barrier synchronization, 64-bit SWAR endpoint scanning, branchless method jumping, MAP_SHARED page-table bypass | `27c2ee2` | run-7ba00dc18712 | 0.054424 | 50.438 | 443 | 24.060064 | 69.064839 |
+| 5 | Two-pass streaming scan completely eliminating items Vec<u64> allocations (saving >21 MB RAM), fused cache-resident group percentile extraction & output formatting | `060f342` | run-7912c18c175d | 0.061999 | 29.295 | 484 | 24.798634 | 69.721388 |
+| 6 | Rejected slight score regression: SWAR newline skipping in Pass 1, read-only zero-CAS endpoint lookup in Pass 2, and direct raw pointer summary formatting | `abc2c95` | run-f056314f934c | 0.060327 | 29.168 | 535 | 24.786504 | 69.710764 |
+| 7 | Rejected regression: thread-local non-atomic count/error arrays in Pass 1, parallel slot reduction, zero-alloc set_len for latency storage, lock-free thread-local range cursors in Pass 2 eliminating all atomic contention, L1 fast endpoint table lookup, and sorting network for N <= 16 | `f09e076` | run-e9b9677c692d | 0.063711 | 30.953 | 689 | 22.946816 | 68.036121 |
+| 8 | Restored Rust after cursor regression | `f6f0c74` | run-86226c1c0649 | 0.062557 | 29.454 | 484 | 24.660949 | 69.600489 |
+| 9 | Hour-local C++ redesign | `d9db9d0` | run-23861fe20fc1 | 0.050142 | 34.177 | 312 | 28.558378 | 72.786677 |
+| 10 | Release mapped output buffers | `c4baf88` | run-26990cc808b6 | 0.047678 | 23.441 | 323 | 31.417257 | 74.858413 |
+| 11 | Unchanged-source confirmation | `af43e3f` | run-0ef7bf129650 | 0.046833 | 23.835 | 323 | 31.594127 | 74.980318 |
+| 12 | Rejected single-pass memory/source trade-off | `934d875` | run-79c5144df686 | 0.044225 | 26.599 | 345 | 31.493662 | 74.911158 |
+| 13 | Restore higher-K hour-local source | `1311354` | run-7a33af9abbe9 | 0.046758 | 23.802 | 323 | 31.628157 | 75.003694 |
+| 14 | Unchanged-source confirmation | `9c8f98c` | run-24951b257cd0 | 0.046647 | 23.544 | 323 | 31.734877 | 75.076841 |
 
 Local `check.py` passed the official seed-1 full output hash
 `495ca09682b9673ef836a506496177680bb4a3af54255174befddb1f83481cd3`.
@@ -30,6 +37,10 @@ are unchanged. The confirmation run `run-86226c1c0649` at `f6f0c74` passed every
 0.062557 s, 29,454,336 bytes, S=484, K=24.660949 and 69.600489 points.
 This confirms the restored implementation beats the rejected cursor experiment. Full public hash and a
 seed-17 sample comparison against the official reference verify the restoration.
+
+Steps 2–7 were Rust implementations. The later hour-local redesign switched
+back to C++ after the local comparison below, and the submitted program is C++.
+The language label in step 2 describes that historical version.
 
 Steps 2 and 3 cite the same run: they are not independent measured improvements.
 Only their combined measured state is supported by that run ID.
@@ -83,7 +94,7 @@ published generator's seed-17 sample. Five alternating full-data runs gave
 measurable gain justified changing the build. The experimental binary and
 training data are not part of the submitted runtime image.
 
-## Single pass plus explicit record reclamation (board confirmation pending)
+## Rejected single-pass record experiment (official trial below)
 
 Remove the full-input hour-run discovery scan. Workers parse byte ranges once
 into private hour-specific six-byte records, then merge only endpoint catalogs.
@@ -110,3 +121,12 @@ fully to the scoring CPU, and the extra memory/source cost erased it. The
 single-pass mapped-record implementation was therefore reverted to the exact
 `af43e3f` source. Both are correct; the measured combined coefficient drives
 this choice. The new large-group oracle remains useful for either implementation.
+
+## Static-link and readability follow-up
+
+Five local interleaved full-data process runs: existing mean 0.037528 s;
+static-linked mean 0.036142 s. Separate shell-wrapped peaks were 24,297,472 and
+23,994,368 bytes. This small local gain is a candidate, not an official score.
+The submitted follow-up retains native tuning, names the fixed calendar window
+from spec section 2.1, improves allocation diagnostics, and applies LLVM format.
+The public full hash and independent hour/quantile oracle pass.
