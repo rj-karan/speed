@@ -6,6 +6,7 @@ Every step from the reference to your final version, each with the live-board ru
 |---|---|---|---|---|---|
 | 0 | The reference, unchanged | | 56.35 | 2,200 | 0 |
 | 1 | Query-first posting lists in C++, plus candidate verification for phrases | run-e6f4196a5413 | 13.192232 | 135.73 | 24.62 |
+| 2 | Index documents and answer independent queries with six workers each | pending board ID | pending | pending | pending |
 
 Local `check.py` passed the official seed-1 full output hash
 `f86973c210228141bcb6f1f1b10188ad2a9b65f71e7cd7cf4590b38de4e80927`.
@@ -14,3 +15,7 @@ board measurement and is not used as a judging claim.
 
 The seed-2 sample generated from the published generator also matched its Python
 reference output hash `86b92e3ceda664396bad5cabc3809b447de0610282eee484605fd23cbd12fea6`.
+
+Parallel indexing alone reduced the full local sandbox run to 9.45 s. Parallel
+query evaluation brought it to 3.56 s, with both the full public hash and the
+seed-2 sample hash unchanged. The board will measure the resulting memory cost.

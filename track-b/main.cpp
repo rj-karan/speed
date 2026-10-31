@@ -1,9 +1,12 @@
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <charconv>
 #include <cstdint>
 #include <cstdio>
 #include <fcntl.h>
 #include <string_view>
+#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -109,6 +112,12 @@ static bool contains_phrase(string_view text, const Query &q, const unordered_ma
     return false;
 }
 
+static void append_number(string &line, uint64_t value) {
+    char buffer[24];
+    auto end = to_chars(buffer, buffer + sizeof buffer, value).ptr;
+    line.append(buffer, end);
+}
+
 int main() {
     Mapping query_file = map_file("/data/queries.txt"), docs_file = map_file("/data/docs.txt");
     if (!query_file.data || !docs_file.data) return 1;
@@ -118,7 +127,6 @@ int main() {
     queries.reserve(50000);
     parse_queries(query_file, ids, queries);
     vector<vector<uint32_t>> postings(ids.size());
-    vector<uint32_t> last_doc(ids.size(), UINT32_MAX);
     vector<string_view> docs;
     docs.reserve(250000);
     const char *p = docs_file.data, *end = p + docs_file.size;
@@ -127,46 +135,88 @@ int main() {
         const char *start = ++p;
         while (p < end && *p != '\n') ++p;
         const char *finish = p++;
-        uint32_t doc_id = docs.size();
         docs.emplace_back(start, finish - start);
-        const char *t = start;
-        while (t < finish) {
-            uint32_t id = token(t, finish, ids);
-            if (id == UINT32_MAX) break;
-            if (id != UINT32_MAX - 1 && last_doc[id] != doc_id) {
-                last_doc[id] = doc_id;
-                postings[id].push_back(doc_id);
-            }
-        }
     }
+    constexpr size_t workers = 6;
+    vector<vector<vector<uint32_t>>> parts(workers);
+    vector<thread> build_threads;
+    for (size_t worker = 0; worker < workers; ++worker) {
+        build_threads.emplace_back([&, worker] {
+            auto &local = parts[worker];
+            local.resize(ids.size());
+            vector<uint32_t> last_doc(ids.size(), UINT32_MAX);
+            size_t begin = docs.size() * worker / workers;
+            size_t finish = docs.size() * (worker + 1) / workers;
+            for (size_t doc_id = begin; doc_id < finish; ++doc_id) {
+                const char *t = docs[doc_id].data();
+                const char *doc_end = t + docs[doc_id].size();
+                while (t < doc_end) {
+                    uint32_t id = token(t, doc_end, ids);
+                    if (id == UINT32_MAX) break;
+                    if (id != UINT32_MAX - 1 && last_doc[id] != doc_id) {
+                        last_doc[id] = doc_id;
+                        local[id].push_back(doc_id);
+                    }
+                }
+            }
+        });
+    }
+    for (thread &t : build_threads) t.join();
+    for (size_t id = 0; id < postings.size(); ++id) {
+        size_t size = 0;
+        for (const auto &part : parts) size += part[id].size();
+        postings[id].reserve(size);
+        for (const auto &part : parts)
+            postings[id].insert(postings[id].end(), part[id].begin(), part[id].end());
+    }
+    parts.clear(); parts.shrink_to_fit();
+    vector<string> output(queries.size());
+    atomic<size_t> next_query{0};
+    auto query_worker = [&]() {
+        while (true) {
+            size_t query_id = next_query.fetch_add(1, memory_order_relaxed);
+            if (query_id >= queries.size()) break;
+            const Query &q = queries[query_id];
+            vector<uint32_t> result;
+            if (q.phrase) {
+                uint32_t rarest = q.terms[0];
+                for (uint32_t id : q.terms) if (postings[id].size() < postings[rarest].size()) rarest = id;
+                for (uint32_t doc : postings[rarest]) {
+                    bool candidate = true;
+                    for (uint32_t id : q.terms) {
+                        if (!binary_search(postings[id].begin(), postings[id].end(), doc)) { candidate = false; break; }
+                    }
+                    if (candidate && contains_phrase(docs[doc], q, ids)) result.push_back(doc);
+                }
+            } else {
+                result = postings[q.terms[0]];
+                for (size_t i = 0; i < q.ops.size(); ++i) {
+                    const auto &next = postings[q.terms[i + 1]];
+                    if (q.ops[i] == 'A') result = intersect(result, next);
+                    else if (q.ops[i] == 'O') result = unite(result, next);
+                    else result = subtract(result, next);
+                }
+            }
+            uint64_t sum = 0;
+            for (uint32_t doc : result) sum += doc;
+            string &line = output[query_id];
+            append_number(line, result.size());
+            line.push_back(' ');
+            append_number(line, sum);
+            for (size_t i = 0; i < min(size_t(10), result.size()); ++i) {
+                line.push_back(' ');
+                append_number(line, result[i]);
+            }
+            line.push_back('\n');
+        }
+    };
+    vector<thread> query_threads;
+    for (size_t i = 0; i < workers; ++i) query_threads.emplace_back(query_worker);
+    for (thread &t : query_threads) t.join();
     FILE *out = fopen("/out/results.txt", "wb");
     if (!out) return 1;
-    for (const Query &q : queries) {
-        vector<uint32_t> result;
-        if (q.phrase) {
-            uint32_t rarest = q.terms[0];
-            for (uint32_t id : q.terms) if (postings[id].size() < postings[rarest].size()) rarest = id;
-            for (uint32_t doc : postings[rarest]) {
-                bool candidate = true;
-                for (uint32_t id : q.terms) {
-                    if (!binary_search(postings[id].begin(), postings[id].end(), doc)) { candidate = false; break; }
-                }
-                if (candidate && contains_phrase(docs[doc], q, ids)) result.push_back(doc);
-            }
-        } else {
-            result = postings[q.terms[0]];
-            for (size_t i = 0; i < q.ops.size(); ++i) {
-                const auto &next = postings[q.terms[i + 1]];
-                if (q.ops[i] == 'A') result = intersect(result, next);
-                else if (q.ops[i] == 'O') result = unite(result, next);
-                else result = subtract(result, next);
-            }
-        }
-        uint64_t sum = 0;
-        for (uint32_t doc : result) sum += doc;
-        fprintf(out, "%zu %llu", result.size(), static_cast<unsigned long long>(sum));
-        for (size_t i = 0; i < min(size_t(10), result.size()); ++i) fprintf(out, " %u", result[i]);
-        fputc('\n', out);
+    for (const string &line : output) {
+        fwrite(line.data(), 1, line.size(), out);
     }
     return fclose(out) != 0;
 }

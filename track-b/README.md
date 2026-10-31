@@ -6,12 +6,14 @@ The task, the input files and the exact output format are in the [spec](https://
 
 The C++ program reads the queries first and interns only terms that are actually
 queried. It memory maps the corpus, tokenizes ASCII bytes exactly as specified,
-and builds sorted document-id posting lists only for those terms. Repeated terms
+and builds sorted document-id posting lists only for those terms. Six workers scan
+disjoint document ranges, then merge their posting lists in document order. Repeated terms
 within a document add one posting. Boolean operators use sorted set intersection,
 union, and difference strictly from left to right. Phrase queries begin with the
 rarest term's posting list, check the other terms' postings, and then re-tokenize
 candidate documents to verify consecutive positions. Output counts, sums and the
-smallest ten ids are computed from the resulting sorted document list.
+smallest ten ids are computed from the resulting sorted document list. Six query
+workers evaluate independent queries and write their results in original order.
 
 ## Dependencies
 
