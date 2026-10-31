@@ -4,7 +4,14 @@ The task, the input files and the exact output format are in the [spec](https://
 
 ## Approach
 
-How your solution works, in plain prose.
+The C++ program reads the queries first and interns only terms that are actually
+queried. It memory maps the corpus, tokenizes ASCII bytes exactly as specified,
+and builds sorted document-id posting lists only for those terms. Repeated terms
+within a document add one posting. Boolean operators use sorted set intersection,
+union, and difference strictly from left to right. Phrase queries begin with the
+rarest term's posting list, check the other terms' postings, and then re-tokenize
+candidate documents to verify consecutive positions. Output counts, sums and the
+smallest ten ids are computed from the resulting sorted document list.
 
 ## Dependencies
 
@@ -12,4 +19,6 @@ None.
 
 ## With another 24 hours
 
-What you would do next.
+Profile common-term Boolean chains and test a compact bitset for frequent query
+terms. Phrase candidates are already sparse, so the Boolean path is the likely
+bottleneck at full scale.
