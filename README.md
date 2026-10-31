@@ -1,7 +1,7 @@
 # BeyondBug — Speed Demon 2026
 
 Our entry for all four tracks of [Speed Demon](https://speeddemon.dev).
-Rust for log ingestion; C++ for search, CSV aggregation and graph traversal.
+C++ implementations for log ingestion, search, CSV aggregation and graph traversal.
 All four solutions have zero non-standard-library runtime dependencies.
 
 ## Build and verify
@@ -31,7 +31,7 @@ SHA-256 to `check.py`. Never substitute a public-seed hash for another seed.
 
 | Track | Approach | Details |
 |---|---|---|
-| A | Two-pass parallel log parsing, compact latency scatter, per-group percentiles | [README](track-a/README.md), [PERF](track-a/PERF.md) |
+| A | Hour-local parallel parsing, compact records and nearest-rank selection | [README](track-a/README.md), [PERF](track-a/PERF.md) |
 | B | Query-first postings, sparse Boolean operations, anchored phrase verification | [README](track-b/README.md), [PERF](track-b/PERF.md) |
 | C | Parallel hostile CSV parsing, indexed region join, shared distinct-name masks | [README](track-c/README.md), [PERF](track-c/PERF.md) |
 | D | Forward/reverse CSR, bidirectional Dijkstra, four query workers | [README](track-d/README.md), [PERF](track-d/PERF.md) |

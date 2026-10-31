@@ -1,32 +1,36 @@
-# Track A: Ingest (BeyondBug)
+# Track A: hour-local aggregation
 
 ## Approach
 
-A dependency-free Rust program maps the log and splits it at newline boundaries
-across up to twelve persistent workers. Fixed-offset timestamp parsing maps the
-specified 72-hour span to hour slots, including the month boundary. SWAR scanning
-finds endpoint delimiters; a shared atomic table interns endpoints, with exact
-byte comparisons on hash collisions and small thread-local lookup caches.
+The dependency-free C++ program maps the input and discovers every contiguous
+run of one hour using vectorized newline scanning. Runs are indexed by hour;
+no bound on input disorder is assumed. Twelve persistent workers then claim
+hours independently. Each hour has its own endpoint dictionary and compact
+six-byte latency/endpoint records. Exact byte comparisons resolve hash collisions.
+A counting scatter groups the latencies in a small hour-local array. Nearest-rank
+selection extracts p50/p95/p99; small groups use sorting. Endpoint keys are sorted
+bytewise, and hour buffers are written in chronological order.
 
-The first scan counts requests and errors. After prefix sums allocate exactly
-one latency array, a second scan scatters latencies into contiguous group slices.
-Workers sort each slice and extract the three nearest-rank percentiles. Output
-is formatted in parallel by hour and concatenated in hour/endpoint byte order.
-Barriers separate counting, allocation, scattering and formatting.
+There are no shared per-request atomics, global latency scatter cursors, or
+cross-worker name-table merges. Temporary records are discarded after their
+hour is formatted. AVX2 finds endpoint delimiters; bounded packed-decimal parsing
+handles up to seven latency digits at once, with a scalar path for longer values
+and file tails. Full uint32 latency values and duplicate requests remain exact.
 
-The final code restores the implementation measured as run-7912c18c175d. A later
-thread-local cursor experiment increased formatted source from 484 to 689 lines
-without improving board time; PERF.md records why it was reverted. The earlier
-version's smaller memory footprint and source size produced a higher K.
+## Build and validation
 
-## Dependencies and validation
+The allowlisted GCC image builds offline with `-march=native`; the event explicitly
+builds native-targeted tracks on its scoring machine, so the resulting binary
+matches that CPU. No non-standard-library runtime dependencies (D = 1).
 
-No runtime libraries beyond Rust's standard library and Linux mmap (D = 1).
-The Docker build uses the allowlisted compiler offline. Full public output must
-match `495ca09682b9673ef836a506496177680bb4a3af54255174befddb1f83481cd3`.
+Validation includes the full public hash, official seed-17 sample reference,
+and `tests/test_ingest.py`: shuffled hours, all methods, byte-order-sensitive
+endpoints, endpoint lengths around vector boundaries, every decimal digit length,
+uint32 extremes, duplicates and empty input. PERF.md distinguishes official
+board results from local experiments.
 
 ## With another 24 hours
 
-Profile atomic count/scatter contention and compare percentile selection with
-sorting. Keep changes only when time, peak memory and formatted source size
-improve the combined coefficient, and validate on additional generator seeds.
+Profile range discovery, parsing and output separately on the scoring CPU.
+Compare direct mapped output and profile-guided compilation using generator
+output. Keep changes only when the combined time/memory/source coefficient improves.

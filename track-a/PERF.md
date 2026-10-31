@@ -33,3 +33,26 @@ seed-17 sample comparison against the official reference verify the restoration.
 
 Steps 2 and 3 cite the same run: they are not independent measured improvements.
 Only their combined measured state is supported by that run ID.
+
+## Hour-local C++ redesign (October 31; board confirmation pending)
+
+Focus is Track A only; other track implementations are unchanged. Rejected local
+prototypes included a two-pass dictionary/cursor rewrite (slower than the existing
+Rust program) and a whole-input packed-record variant (higher peak storage).
+The selected design indexes contiguous runs by hour, then lets each worker own
+an entire hour's parsing, grouping, quantiles and formatting. This removes global
+per-request atomic counters and scatter cursors and keeps temporary latency arrays
+small. All hour runs are discovered at runtime; out-of-order hours remain correct.
+
+Initial x86-64-v3 local A/B timings (Ryzen 7 7435HS, six physical cores plus SMT,
+prewarmed input, official process timer, five alternating runs): Rust middle-three
+mean 0.045164 s; hour-local C++ 0.037621 s. Local peak cgroup memory including a
+shell wrapper was 35,266,560 bytes. These are local experiments, not official
+board measurements. The submitted build uses native CPU tuning, which the rules
+allow and which triggers compilation on the scoring machine itself.
+
+Full public output hash and seed-17 sample reference match. An independent oracle
+also verifies 6,000 shuffled requests with injected duplicates, all methods,
+32-bit latency extremes, every decimal length, month/hour boundaries, prefix
+ordering and endpoint lengths at vector boundaries; empty input is checked too.
+The requested 85-point target has not been established by a board run yet.
