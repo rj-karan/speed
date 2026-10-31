@@ -138,3 +138,23 @@ Official confirmation: `run-3550441bc92b` at `e51a4bd` passed all gates with
 0.651392 s, 96,124,928 bytes, S=530, K=13.355666 and 56.283277 points. Compared
 with the previous compact-index run, time fell 35.1%; the measured coefficient
 improved despite the additional source and four-megabyte direct-lookup table.
+
+## Further rejected experiments
+
+Offline PGO trained on newly generated seed-17 sample data built successfully,
+and all full-data hashes matched. Five alternating local runs gave 0.482199 s
+without PGO and 0.479415 s with PGO/native tuning: insufficient evidence of a
+meaningful gain. It was not submitted.
+
+A query-directed prototype sampled 1,000 current documents to choose positive
+anchors for Boolean disjuncts and phrases, indexing selected anchors and frequent
+terms. It verified candidates against actual documents, so sampling never
+approximated answers. The full public hash and independent query oracle passed,
+but it was rejected: 0.466540 → 1.384542 s locally, with about 182 MB peak.
+Candidate verification and temporary posting allocations dominated the saving.
+
+A refinement indexed NOT terms, used bitmap evaluation for fully indexed
+expressions and added a 256-bit per-document Bloom rejection filter followed by
+exact verification. It again passed the public hash and oracle, but measured
+0.438416 → 0.506572 s and 100,560,896 bytes, with more source. Also rejected.
+The submitted block-tokenization implementation remains unchanged.

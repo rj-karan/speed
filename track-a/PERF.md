@@ -76,3 +76,9 @@ unmet; other tracks now need work as well.
 Official confirmation for `c4baf88`: `run-26990cc808b6` passed every gate,
 measuring 0.047678 s, 23,441,408 bytes, S=323, K=31.417257 and 74.858413
 points. This improves on `d9db9d0` / `run-23861fe20fc1` at 72.786677 points.
+
+PGO experiment rejected: an offline GCC build trained on the byte-identical
+published generator's seed-17 sample. Five alternating full-data runs gave
+0.036724 s without PGO and 0.036759 s with it; every output hash matched. No
+measurable gain justified changing the build. The experimental binary and
+training data are not part of the submitted runtime image.

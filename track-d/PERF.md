@@ -60,3 +60,13 @@ the public hash, seed-17 tiny and independent heapq oracle. It was rejected:
 five alternating local runs gave 1.412830 s before and 1.568383 s after. The
 extra neighbourhood checks cost more than the heap operations they removed.
 The submitted radix-only implementation remains unchanged.
+
+An offline native/PGO build trained on newly generated seed-17 sample data passed
+all five full-data hashes. The alternating local comparison measured 1.484468 s
+before and 1.304052 s after. This candidate is retained outside the submission
+for further evaluation; it was not promoted because D remains well below the
+three counted tracks and this round prioritizes the overall title. No official
+PGO gain is claimed. The latest radix-only confirmation, `run-47c645bff20d` at
+`af43e3f`, passed with 1.047887 s, 279,580,672 bytes, S=312, K=7.804513 and
+44.617289 points. This varies from the earlier run of unchanged code and is not
+attributed to another algorithm change.

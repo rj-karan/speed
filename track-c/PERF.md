@@ -95,3 +95,12 @@ Rejected before submission: routing names to exclusive shard owners passed hashe
 but slowed local mean 0.042174 → 0.071305 s and peaked around 56 MB. Splitting
 immutable keys and membership words into separate 32-byte tables also lost:
 0.056974 → 0.065962 s locally. Both were reverted; source and memory cost matter.
+
+Official confirmation: `run-078fb2108046` at `af43e3f` passed every gate with
+0.061212 s, 22,888,448 bytes, S=362, K=22.322696 and 67.437332 points. This is
+only a modest gain over the prior inline-prefix implementation; local speedups
+were larger and should not be substituted for this official measurement.
+
+Offline PGO on newly generated seed-17 sample data was rejected. Five alternating
+full-data runs measured 0.050499 s without it and 0.056448 s with PGO/native
+tuning. All hashes matched, but the candidate was slower.
