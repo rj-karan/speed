@@ -3,7 +3,7 @@ use std::io::Write;
 use std::os::unix::io::AsRawFd;
 
 extern "C" {
-    fn mmap(addr: *mut u8, length: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *mut u8;
+    fn mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *mut u8;
 }
 
 #[derive(Clone, Copy)]
@@ -24,8 +24,8 @@ impl Aggregate {
             count: 0,
             id_sum: 0,
             amount_sum: 0,
-            amount_min: 0,
-            amount_max: 0,
+            amount_min: i64::MAX,
+            amount_max: i64::MIN,
             names_distinct: 0,
             name_bytes: 0,
             note_bytes: 0,
@@ -33,7 +33,7 @@ impl Aggregate {
     }
 }
 
-const TABLE_CAP: usize = 262144;
+const TABLE_CAP: usize = 131072;
 const TABLE_MASK: usize = TABLE_CAP - 1;
 
 #[derive(Clone, Copy)]
@@ -48,87 +48,34 @@ struct NameEntry {
 fn fnv1a_64(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
+        h = (h ^ (b as u64)).wrapping_mul(0x100000001b3);
     }
     if h == 0 { 1 } else { h }
 }
 
 #[inline(always)]
-fn read_uint(data: &[u8], mut p: usize) -> (u32, usize) {
+unsafe fn read_uint(mut p: *const u8) -> (u32, *const u8) {
     let mut val: u32 = 0;
-    while p < data.len() && data[p] >= b'0' && data[p] <= b'9' {
-        val = val * 10 + (data[p] - b'0') as u32;
-        p += 1;
+    while *p >= b'0' && *p <= b'9' {
+        val = val * 10 + (*p - b'0') as u32;
+        p = p.add(1);
     }
     (val, p)
 }
 
-struct Field {
-    raw_offset: u32,
-    raw_len: u32,
-    unescaped_bytes: u32,
-}
-
-#[inline(always)]
-fn read_text(data: &[u8], mut p: usize) -> (Field, usize) {
-    if data[p] != b'"' {
-        let start = p;
-        while p < data.len() && data[p] != b',' {
-            p += 1;
-        }
-        let len = (p - start) as u32;
-        (
-            Field {
-                raw_offset: start as u32,
-                raw_len: len,
-                unescaped_bytes: len,
-            },
-            p,
-        )
-    } else {
-        p += 1; // Skip opening quote
-        let start = p;
-        let mut escapes = 0u32;
-        loop {
-            if data[p] != b'"' {
-                p += 1;
-                continue;
-            }
-            if p + 1 < data.len() && data[p + 1] == b'"' {
-                p += 2;
-                escapes += 1;
-            } else {
-                break;
-            }
-        }
-        let finish = p;
-        p += 1; // Skip closing quote
-        let raw_len = (finish - start) as u32;
-        (
-            Field {
-                raw_offset: start as u32,
-                raw_len,
-                unescaped_bytes: raw_len - escapes,
-            },
-            p,
-        )
-    }
-}
-
-fn map_file(path: &str) -> Option<(&'static [u8], usize)> {
+fn map_file(path: &str) -> Option<(&'static [u8], usize, *mut u8)> {
     let file = File::open(path).ok()?;
     let metadata = file.metadata().ok()?;
-    let size = metadata.len() as usize;
-    if size == 0 {
-        return Some((&[], 0));
+    let sz = metadata.len() as usize;
+    if sz == 0 {
+        return Some((&[], 0, std::ptr::null_mut()));
     }
-    let ptr = unsafe { mmap(std::ptr::null_mut(), size, 1, 2, file.as_raw_fd(), 0) };
+    let ptr = unsafe { mmap(std::ptr::null_mut(), sz, 1, 2, file.as_raw_fd(), 0) };
     if ptr == usize::MAX as *mut u8 {
         return None;
     }
-    let slice = unsafe { std::slice::from_raw_parts(ptr, size) };
-    Some((slice, size))
+    let slice = unsafe { std::slice::from_raw_parts(ptr, sz) };
+    Some((slice, sz, ptr))
 }
 
 fn format_money(cents: i64) -> String {
@@ -150,8 +97,8 @@ fn main() {
         "data/c/records.csv"
     };
 
-    let (regions_data, regions_size) = map_file(regions_path).expect("open regions");
-    let (records_data, records_size) = map_file(records_path).expect("open records");
+    let (regions_data, regions_size, _) = map_file(regions_path).expect("open regions");
+    let (records_data, records_size, rec_ptr) = map_file(records_path).expect("open records");
 
     let output_path = if std::path::Path::new("/out").is_dir() {
         "/out/aggregates.txt"
@@ -171,16 +118,12 @@ fn main() {
     let mut country_codes = Vec::with_capacity(300);
 
     let mut p = 0;
-    while p < regions_size && regions_data[p] != b'\n' {
-        p += 1;
-    }
-    if p < regions_size {
-        p += 1;
-    }
+    while p < regions_size && regions_data[p] != b'\n' { p += 1; }
+    if p < regions_size { p += 1; }
 
     while p < regions_size {
-        let (id, next_p) = read_uint(regions_data, p);
-        p = next_p + 1; // Skip comma
+        let (id, next_p) = unsafe { read_uint(regions_data.as_ptr().add(p)) };
+        p = (unsafe { next_p.offset_from(regions_data.as_ptr()) } as usize) + 1; // Skip comma
         let c0 = (regions_data[p] - b'A') as u16;
         let c1 = (regions_data[p + 1] - b'A') as u16;
         let c2 = (regions_data[p + 2] - b'A') as u16;
@@ -196,144 +139,238 @@ fn main() {
             regions_table[id as usize] = idx;
         }
         p += 3;
-        while p < regions_size && regions_data[p] != b'\n' {
-            p += 1;
-        }
-        if p < regions_size {
-            p += 1;
-        }
+        while p < regions_size && regions_data[p] != b'\n' { p += 1; }
+        if p < regions_size { p += 1; }
     }
 
     let unmatched_idx = country_codes.len();
     let num_groups = unmatched_idx + 1;
-    let mut groups = vec![Aggregate::new(); num_groups];
 
-    // Open addressing table for distinct names
-    let mut name_table = vec![
-        NameEntry {
-            hash: 0,
-            offset: 0,
-            len_plus_one: 0,
-            countries: [0; 4],
-        };
-        TABLE_CAP
-    ];
-
+    let nthreads = std::thread::available_parallelism().map_or(12, |n| n.get()).min(12);
+    let mut bounds = vec![0; nthreads + 1];
     p = 0;
-    // Skip UTF-8 BOM if present at start
-    if records_size >= 3 && records_data[0] == 0xEF && records_data[1] == 0xBB && records_data[2] == 0xBF {
-        p = 3;
-    }
-    // Skip header line
-    while p < records_size && records_data[p] != b'\n' {
-        p += 1;
-    }
-    if p < records_size {
-        p += 1;
-    }
+    if records_size >= 3 && records_data[0] == 0xef && records_data[1] == 0xbb && records_data[2] == 0xbf { p = 3; }
+    while p < records_size && records_data[p] != b'\n' { p += 1; }
+    bounds[0] = p + 1;
+    bounds[nthreads] = records_size;
 
-    while p < records_size {
-        if p + 3 <= records_size && records_data[p] == 0xEF && records_data[p + 1] == 0xBB && records_data[p + 2] == 0xBF {
-            p += 3;
-        }
-        let (id, next_p) = read_uint(records_data, p);
-        p = next_p + 1; // Skip comma
-
-        let (name_field, next_p) = read_text(records_data, p);
-        p = next_p + 1; // Skip comma
-
-        let (note_field, next_p) = read_text(records_data, p);
-        p = next_p + 1; // Skip comma
-
-        let (region_id, next_p) = read_uint(records_data, p);
-        p = next_p + 1; // Skip comma
-
-        let negative = records_data[p] == b'-';
-        if negative {
-            p += 1;
-        }
-        let (dollars, next_p) = read_uint(records_data, p);
-        p = next_p + 1; // Skip '.'
-        let tens = (records_data[p] - b'0') as i32;
-        let units = (records_data[p + 1] - b'0') as i32;
-        p += 2;
-        let mut cents = (dollars as i32) * 100 + tens * 10 + units;
-        if negative {
-            cents = -cents;
-        }
-        let cents_i64 = cents as i64;
-
-        if p < records_size && records_data[p] == b'\r' {
-            p += 1;
-        }
-        if p < records_size && records_data[p] == b'\n' {
-            p += 1;
-        }
-
-        let key = if (region_id as usize) < regions_table.len() {
-            let k = regions_table[region_id as usize];
-            if k == NO_COUNTRY {
-                unmatched_idx
-            } else {
-                k as usize
-            }
-        } else {
-            unmatched_idx
-        };
-
-        let g = &mut groups[key];
-        if g.count == 0 || cents_i64 < g.amount_min {
-            g.amount_min = cents_i64;
-        }
-        if g.count == 0 || cents_i64 > g.amount_max {
-            g.amount_max = cents_i64;
-        }
-        g.count += 1;
-        g.id_sum += id as u64;
-        g.amount_sum += cents_i64;
-        g.name_bytes += name_field.unescaped_bytes as u64;
-        g.note_bytes += note_field.unescaped_bytes as u64;
-
-        // Distinct name check
-        let name_bytes = &records_data[name_field.raw_offset as usize..name_field.raw_offset as usize + name_field.raw_len as usize];
-        let h = fnv1a_64(name_bytes);
-        let mut slot = (h as usize) & TABLE_MASK;
-        loop {
-            let entry = &mut name_table[slot];
-            if entry.len_plus_one == 0 {
-                entry.hash = h;
-                entry.offset = name_field.raw_offset;
-                entry.len_plus_one = name_field.raw_len + 1;
-                entry.countries[key >> 6] |= 1u64 << (key & 63);
-                g.names_distinct += 1;
-                break;
-            } else if entry.len_plus_one == name_field.raw_len + 1 && entry.hash == h {
-                let existing = &records_data[entry.offset as usize..entry.offset as usize + name_field.raw_len as usize];
-                if existing == name_bytes {
-                    let word = &mut entry.countries[key >> 6];
-                    let bit = 1u64 << (key & 63);
-                    if (*word & bit) == 0 {
-                        *word |= bit;
-                        g.names_distinct += 1;
+    for i in 1..nthreads {
+        let approx = (records_size * i) / nthreads;
+        let mut q = approx;
+        while q < approx + 100000 {
+            if records_data[q] == b'\n' {
+                let q_next = q + 1;
+                if q_next < records_size && records_data[q_next] >= b'0' && records_data[q_next] <= b'9' {
+                    if q >= 3 && records_data[q - 3] == b'.' && records_data[q - 2] >= b'0' && records_data[q - 2] <= b'9' && records_data[q - 1] >= b'0' && records_data[q - 1] <= b'9' {
+                        bounds[i] = q_next;
+                        break;
                     }
-                    break;
                 }
             }
-            slot = (slot + 1) & TABLE_MASK;
+            q += 1;
         }
     }
 
-    // Sort countries alphabetically
+    let regions_ptr = regions_table.as_ptr() as usize;
+    let raw_ptr = rec_ptr as usize;
+
+    let handles: Vec<_> = (0..nthreads).map(|t| {
+        let start = bounds[t];
+        let end = bounds[t + 1];
+        std::thread::spawn(move || {
+            let base = raw_ptr as *const u8;
+            let reg_tab = regions_ptr as *const u16;
+            let mut local_groups = vec![Aggregate::new(); num_groups];
+            let mut local_table = vec![NameEntry { hash: 0, offset: 0, len_plus_one: 0, countries: [0; 4] }; TABLE_CAP];
+
+            let mut p = unsafe { base.add(start) };
+            let p_end = unsafe { base.add(end) };
+
+            unsafe {
+                while p < p_end {
+                    if p.add(3) <= p_end && *p == 0xef && *p.add(1) == 0xbb && *p.add(2) == 0xbf {
+                        p = p.add(3);
+                    }
+                    let (id, next_p) = read_uint(p);
+                    p = next_p.add(1); // comma
+
+                    let name_offset: u32;
+                    let name_raw_len: u32;
+                    let name_unescaped: u32;
+                    if *p != b'"' {
+                        let n_start = p;
+                        while *p != b',' { p = p.add(1); }
+                        name_offset = n_start.offset_from(base) as u32;
+                        name_raw_len = p.offset_from(n_start) as u32;
+                        name_unescaped = name_raw_len;
+                    } else {
+                        p = p.add(1); // skip opening quote
+                        let n_start = p;
+                        name_offset = n_start.offset_from(base) as u32;
+                        let mut escapes = 0u32;
+                        loop {
+                            if *p != b'"' { p = p.add(1); continue; }
+                            if *p.add(1) != b'"' { break; }
+                            p = p.add(2);
+                            escapes += 1;
+                        }
+                        name_raw_len = p.offset_from(n_start) as u32;
+                        name_unescaped = name_raw_len - escapes;
+                        p = p.add(1); // closing quote
+                    }
+                    let name_bytes = std::slice::from_raw_parts(base.add(name_offset as usize), name_raw_len as usize);
+                    p = p.add(1); // comma
+
+                    let note_unescaped: u32;
+                    if *p != b'"' {
+                        let n_start = p;
+                        while *p != b',' { p = p.add(1); }
+                        note_unescaped = p.offset_from(n_start) as u32;
+                    } else {
+                        p = p.add(1);
+                        let n_start = p;
+                        let mut escapes = 0u32;
+                        loop {
+                            if *p != b'"' { p = p.add(1); continue; }
+                            if *p.add(1) != b'"' { break; }
+                            p = p.add(2);
+                            escapes += 1;
+                        }
+                        note_unescaped = p.offset_from(n_start) as u32 - escapes;
+                        p = p.add(1);
+                    }
+                    p = p.add(1); // comma
+
+                    let (region_id, next_p) = read_uint(p);
+                    p = next_p.add(1); // comma
+
+                    let negative = *p == b'-';
+                    if negative { p = p.add(1); }
+                    let (dollars, next_p) = read_uint(p);
+                    p = next_p.add(1); // '.'
+                    let tens = (*p - b'0') as i32;
+                    let units = (*p.add(1) - b'0') as i32;
+                    p = p.add(2);
+                    let mut cents = (dollars as i32) * 100 + tens * 10 + units;
+                    if negative { cents = -cents; }
+                    let cents_i64 = cents as i64;
+
+                    if p < p_end && *p == b'\r' { p = p.add(1); }
+                    if p < p_end && *p == b'\n' { p = p.add(1); }
+
+                    let key = if (region_id as usize) < 1_000_000 {
+                        let k = *reg_tab.add(region_id as usize);
+                        if k == NO_COUNTRY { unmatched_idx } else { k as usize }
+                    } else {
+                        unmatched_idx
+                    };
+
+                    let g = &mut local_groups[key];
+                    if g.count == 0 || cents_i64 < g.amount_min { g.amount_min = cents_i64; }
+                    if g.count == 0 || cents_i64 > g.amount_max { g.amount_max = cents_i64; }
+                    g.count += 1;
+                    g.id_sum += id as u64;
+                    g.amount_sum += cents_i64;
+                    g.name_bytes += name_unescaped as u64;
+                    g.note_bytes += note_unescaped as u64;
+
+                    // Name distinct table
+                    let h = fnv1a_64(name_bytes);
+                    let mut s = (h as usize) & TABLE_MASK;
+                    loop {
+                        let entry = &mut local_table[s];
+                        if entry.len_plus_one == 0 {
+                            entry.hash = h;
+                            entry.offset = name_offset;
+                            entry.len_plus_one = name_raw_len + 1;
+                            entry.countries[key >> 6] |= 1u64 << (key & 63);
+                            break;
+                        } else if entry.len_plus_one == name_raw_len + 1 && entry.hash == h {
+                            let existing = std::slice::from_raw_parts(base.add(entry.offset as usize), name_raw_len as usize);
+                            if existing == name_bytes {
+                                entry.countries[key >> 6] |= 1u64 << (key & 63);
+                                break;
+                            }
+                        }
+                        s = (s + 1) & TABLE_MASK;
+                    }
+                }
+            }
+            (local_groups, local_table)
+        })
+    }).collect();
+
+    let mut all_groups = vec![Aggregate::new(); num_groups];
+    let mut global_name_table = vec![NameEntry { hash: 0, offset: 0, len_plus_one: 0, countries: [0; 4] }; 262144];
+    const GLOBAL_MASK: usize = 262144 - 1;
+
+    for h in handles {
+        let (lg, lt) = h.join().unwrap();
+        for k in 0..num_groups {
+            let g = &mut all_groups[k];
+            let src = &lg[k];
+            if src.count > 0 {
+                g.count += src.count;
+                g.id_sum += src.id_sum;
+                g.amount_sum += src.amount_sum;
+                g.name_bytes += src.name_bytes;
+                g.note_bytes += src.note_bytes;
+                if g.amount_min == i64::MAX || src.amount_min < g.amount_min { g.amount_min = src.amount_min; }
+                if g.amount_max == i64::MIN || src.amount_max > g.amount_max { g.amount_max = src.amount_max; }
+            }
+        }
+        for entry in lt {
+            if entry.len_plus_one > 0 {
+                let name_len = (entry.len_plus_one - 1) as usize;
+                let name_bytes = &records_data[entry.offset as usize..entry.offset as usize + name_len];
+                let h = entry.hash;
+                let mut s = (h as usize) & GLOBAL_MASK;
+                loop {
+                    let g_entry = &mut global_name_table[s];
+                    if g_entry.len_plus_one == 0 {
+                        g_entry.hash = h;
+                        g_entry.offset = entry.offset;
+                        g_entry.len_plus_one = entry.len_plus_one;
+                        for i in 0..4 { g_entry.countries[i] |= entry.countries[i]; }
+                        break;
+                    } else if g_entry.len_plus_one == entry.len_plus_one && g_entry.hash == h {
+                        let existing = &records_data[g_entry.offset as usize..g_entry.offset as usize + name_len];
+                        if existing == name_bytes {
+                            for i in 0..4 { g_entry.countries[i] |= entry.countries[i]; }
+                            break;
+                        }
+                    }
+                    s = (s + 1) & GLOBAL_MASK;
+                }
+            }
+        }
+    }
+
+    // Count distinct names per country
+    for entry in &global_name_table {
+        if entry.len_plus_one > 0 {
+            for word_idx in 0..4 {
+                let mut w = entry.countries[word_idx];
+                while w != 0 {
+                    let bit = w.trailing_zeros() as usize;
+                    let k = (word_idx << 6) | bit;
+                    if k < num_groups {
+                        all_groups[k].names_distinct += 1;
+                    }
+                    w &= w - 1;
+                }
+            }
+        }
+    }
+
     let mut order: Vec<usize> = (0..country_codes.len()).collect();
     order.sort_unstable_by_key(|&i| country_codes[i]);
     order.push(unmatched_idx);
 
     let mut out_buffer = Vec::with_capacity(64 * 1024);
     for &key in &order {
-        let g = &groups[key];
-        if g.count == 0 {
-            continue;
-        }
+        let g = &all_groups[key];
+        if g.count == 0 { continue; }
         if key == unmatched_idx {
             out_buffer.extend_from_slice(b"_UNMATCHED");
         } else {

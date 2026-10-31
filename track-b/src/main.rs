@@ -24,8 +24,7 @@ struct TermEntry {
 fn fnv1a(bytes: &[u8]) -> u32 {
     let mut h: u32 = 0x811c9dc5;
     for &b in bytes {
-        h ^= b as u32;
-        h = h.wrapping_mul(0x01000193);
+        h = (h ^ (b as u32)).wrapping_mul(0x01000193);
     }
     h
 }
@@ -67,44 +66,54 @@ fn intern(
 }
 
 #[inline(always)]
-fn next_token(
-    data: &[u8],
-    mut p: usize,
-    end: usize,
-    query_data: &[u8],
-    table: &[TermEntry],
-) -> (u32, usize) {
-    while p < end && !data[p].is_ascii_alphanumeric() {
-        p += 1;
+unsafe fn next_token_fast(
+    p: *const u8,
+    end: *const u8,
+    query_data: *const u8,
+    table: *const TermEntry,
+) -> (u32, *const u8) {
+    let mut cur = p;
+    while cur < end && !(*cur).is_ascii_alphanumeric() {
+        cur = cur.add(1);
     }
-    if p == end {
-        return (u32::MAX, p);
+    if cur >= end {
+        return (u32::MAX, cur);
     }
-    let mut buf = [0u8; 33];
-    let mut len = 0usize;
-    while p < end && data[p].is_ascii_alphanumeric() {
-        let mut c = data[p];
+    let word_start = cur;
+    let mut h: u32 = 0x811c9dc5;
+    let mut len: usize = 0;
+    while cur < end && (*cur).is_ascii_alphanumeric() {
+        let mut c = *cur;
         if c >= b'A' && c <= b'Z' {
             c += 32;
         }
-        if len < buf.len() {
-            buf[len] = c;
+        if len < 33 {
+            h = (h ^ (c as u32)).wrapping_mul(0x01000193);
             len += 1;
         }
-        p += 1;
+        cur = cur.add(1);
     }
-    let word = &buf[..len];
-    let h = fnv1a(word);
+
     let mut slot = (h as usize) & TABLE_MASK;
     loop {
-        let entry = &table[slot];
+        let entry = &*table.add(slot);
         if entry.len == 0 {
-            return (u32::MAX - 1, p);
+            return (u32::MAX - 1, cur);
         }
         if entry.hash == h && entry.len as usize == len {
-            let off = entry.offset as usize;
-            if &query_data[off..off + len] == word {
-                return (entry.id, p);
+            let mut match_ok = true;
+            for i in 0..len {
+                let mut c = *word_start.add(i);
+                if c >= b'A' && c <= b'Z' {
+                    c += 32;
+                }
+                if *query_data.add(entry.offset as usize + i) != c {
+                    match_ok = false;
+                    break;
+                }
+            }
+            if match_ok {
+                return (entry.id, cur);
             }
         }
         slot = (slot + 1) & TABLE_MASK;
@@ -162,17 +171,18 @@ fn subtract(a: &[u32], b: &[u32]) -> Vec<u32> {
     res
 }
 
-fn contains_phrase(
-    doc_text: &[u8],
+unsafe fn contains_phrase(
+    doc_text: *const u8,
+    doc_len: usize,
     terms: &[u32],
-    query_data: &[u8],
-    table: &[TermEntry],
+    query_data: *const u8,
+    table: *const TermEntry,
 ) -> bool {
     let mut seq = Vec::with_capacity(64);
-    let mut p = 0;
-    let end = doc_text.len();
+    let mut p = doc_text;
+    let end = doc_text.add(doc_len);
     while p < end {
-        let (id, next_p) = next_token(doc_text, p, end, query_data, table);
+        let (id, next_p) = next_token_fast(p, end, query_data, table);
         p = next_p;
         if id == u32::MAX {
             break;
@@ -190,19 +200,19 @@ fn contains_phrase(
     false
 }
 
-fn map_file(path: &str) -> Option<(&'static [u8], usize)> {
+fn map_file(path: &str) -> Option<(&'static [u8], usize, *mut u8)> {
     let file = File::open(path).ok()?;
     let metadata = file.metadata().ok()?;
     let size = metadata.len() as usize;
     if size == 0 {
-        return Some((&[], 0));
+        return Some((&[], 0, std::ptr::null_mut()));
     }
     let ptr = unsafe { mmap(std::ptr::null_mut(), size, 1, 2, file.as_raw_fd(), 0) };
     if ptr == usize::MAX as *mut u8 {
         return None;
     }
     let slice = unsafe { std::slice::from_raw_parts(ptr, size) };
-    Some((slice, size))
+    Some((slice, size, ptr))
 }
 
 fn main() {
@@ -218,8 +228,8 @@ fn main() {
         "data/b/docs.txt"
     };
 
-    let (query_data, query_size) = map_file(queries_path).expect("open queries");
-    let (docs_data, docs_size) = map_file(docs_path).expect("open docs");
+    let (query_data, query_size, _) = map_file(queries_path).expect("open queries");
+    let (_, docs_size, docs_ptr) = map_file(docs_path).expect("open docs");
 
     let output_path = if std::path::Path::new("/out").is_dir() {
         "/out/results.txt"
@@ -306,24 +316,26 @@ fn main() {
 
     // Parse docs offsets
     let mut docs_spans = Vec::with_capacity(300_000);
-    p = 0;
-    while p < docs_size {
-        while p < docs_size && docs_data[p] != b'\t' {
-            p += 1;
-        }
-        p += 1; // Skip tab
-        let start = p;
-        while p < docs_size && docs_data[p] != b'\n' {
-            p += 1;
-        }
-        let end = if p > start && docs_data[p - 1] == b'\r' {
-            p - 1
-        } else {
-            p
-        };
-        docs_spans.push((start as u32, (end - start) as u32));
-        if p < docs_size && docs_data[p] == b'\n' {
-            p += 1;
+    let mut dp = docs_ptr as *const u8;
+    let d_end = unsafe { dp.add(docs_size) };
+    unsafe {
+        while dp < d_end {
+            while dp < d_end && *dp != b'\t' {
+                dp = dp.add(1);
+            }
+            dp = dp.add(1); // Skip tab
+            let start = dp;
+            while dp < d_end && *dp != b'\n' {
+                dp = dp.add(1);
+            }
+            let mut finish = dp;
+            if finish > start && *finish.sub(1) == b'\r' {
+                finish = finish.sub(1);
+            }
+            docs_spans.push((start.offset_from(docs_ptr as *const u8) as u32, finish.offset_from(start) as u32));
+            if dp < d_end && *dp == b'\n' {
+                dp = dp.add(1);
+            }
         }
     }
 
@@ -333,7 +345,7 @@ fn main() {
 
     let docs_spans = Arc::new(docs_spans);
     let term_table = Arc::new(term_table);
-    let docs_data_ptr = docs_data.as_ptr() as usize;
+    let docs_data_ptr = docs_ptr as usize;
     let query_data_ptr = query_data.as_ptr() as usize;
 
     // Parallel indexing
@@ -347,23 +359,27 @@ fn main() {
         let handle = std::thread::spawn(move || {
             let mut local_postings: Vec<Vec<u32>> = (0..num_terms).map(|_| Vec::new()).collect();
             let mut last_doc = vec![u32::MAX; num_terms];
-            let q_data = unsafe { std::slice::from_raw_parts(query_data_ptr as *const u8, query_size) };
-            let d_data = unsafe { std::slice::from_raw_parts(docs_data_ptr as *const u8, docs_size) };
+            let q_base = query_data_ptr as *const u8;
+            let d_base = docs_data_ptr as *const u8;
+            let t_base = table_ref.as_ptr();
 
             for doc_id in begin..finish {
                 let (off, len) = spans_ref[doc_id];
-                let text = &d_data[off as usize..off as usize + len as usize];
-                let mut pos = 0;
-                let end = text.len();
-                while pos < end {
-                    let (id, next_p) = next_token(text, pos, end, q_data, &table_ref);
-                    pos = next_p;
-                    if id == u32::MAX {
-                        break;
-                    }
-                    if id != u32::MAX - 1 && last_doc[id as usize] != doc_id as u32 {
-                        last_doc[id as usize] = doc_id as u32;
-                        local_postings[id as usize].push(doc_id as u32);
+                let text_ptr = unsafe { d_base.add(off as usize) };
+                let end_ptr = unsafe { text_ptr.add(len as usize) };
+                let mut pos = text_ptr;
+
+                unsafe {
+                    while pos < end_ptr {
+                        let (id, next_p) = next_token_fast(pos, end_ptr, q_base, t_base);
+                        pos = next_p;
+                        if id == u32::MAX {
+                            break;
+                        }
+                        if id != u32::MAX - 1 && last_doc[id as usize] != doc_id as u32 {
+                            last_doc[id as usize] = doc_id as u32;
+                            local_postings[id as usize].push(doc_id as u32);
+                        }
                     }
                 }
             }
@@ -405,8 +421,9 @@ fn main() {
 
         let handle = std::thread::spawn(move || {
             let mut thread_output = Vec::with_capacity(num_queries / num_workers + 16);
-            let q_data = unsafe { std::slice::from_raw_parts(query_data_ptr as *const u8, query_size) };
-            let d_data = unsafe { std::slice::from_raw_parts(docs_data_ptr as *const u8, docs_size) };
+            let q_base = query_data_ptr as *const u8;
+            let d_base = docs_data_ptr as *const u8;
+            let t_base = table_ref.as_ptr();
 
             loop {
                 let qid = nq.fetch_add(1, Ordering::Relaxed);
@@ -434,8 +451,8 @@ fn main() {
                             }
                             if candidate {
                                 let (off, len) = spans_ref[doc as usize];
-                                let doc_text = &d_data[off as usize..off as usize + len as usize];
-                                if contains_phrase(doc_text, &q.terms, q_data, &table_ref) {
+                                let doc_text = unsafe { d_base.add(off as usize) };
+                                if unsafe { contains_phrase(doc_text, len as usize, &q.terms, q_base, t_base) } {
                                     result.push(doc);
                                 }
                             }

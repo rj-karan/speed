@@ -7,8 +7,9 @@ Every step from the reference to your final version, each with the live-board ru
 | 0 | The reference, unchanged | | 56.35 | 2,200 | 0 |
 | 1 | Query-first posting lists in C++, plus candidate verification for phrases | run-e6f4196a5413 | 13.192232 | 135.73 | 24.62 |
 | 2 | Pure Rust rewrite (D=1): 12-thread parallel indexing, query-first fast hash table, 12-thread parallel query evaluation | pending board ID | pending | pending | pending |
+| 3 | On-the-fly register-based FNV-1a hashing eliminating token buffer copies across 250k documents | pending board ID | pending | pending | pending |
 
 Local `check.py` passed the official seed-1 full output hash
 `f86973c210228141bcb6f1f1b10188ad2a9b65f71e7cd7cf4590b38de4e80927`.
-The local Docker check took 1.23 s including container startup; this is not a
+The local Docker check took 1.11 s including container startup; this is not a
 board measurement and is not used as a judging claim.

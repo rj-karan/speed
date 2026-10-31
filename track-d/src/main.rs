@@ -14,11 +14,11 @@ struct Edge {
     weight: u32,
 }
 
-struct MinHeap {
+struct QuadHeap {
     data: Vec<(u64, u32)>, // (cost, node)
 }
 
-impl MinHeap {
+impl QuadHeap {
     fn with_capacity(cap: usize) -> Self {
         Self {
             data: Vec::with_capacity(cap),
@@ -45,7 +45,7 @@ impl MinHeap {
         let mut idx = self.data.len();
         self.data.push((cost, node));
         while idx > 0 {
-            let parent = (idx - 1) / 2;
+            let parent = (idx - 1) / 4;
             if self.data[idx].0 < self.data[parent].0 {
                 self.data.swap(idx, parent);
                 idx = parent;
@@ -67,18 +67,20 @@ impl MinHeap {
             let len = self.data.len();
             let mut idx = 0;
             loop {
-                let left = 2 * idx + 1;
-                let right = 2 * idx + 2;
-                let mut smallest = idx;
-                if left < len && self.data[left].0 < self.data[smallest].0 {
-                    smallest = left;
+                let first_child = 4 * idx + 1;
+                if first_child >= len {
+                    break;
                 }
-                if right < len && self.data[right].0 < self.data[smallest].0 {
-                    smallest = right;
+                let mut best_child = first_child;
+                let last_child = (first_child + 4).min(len);
+                for c in (first_child + 1)..last_child {
+                    if self.data[c].0 < self.data[best_child].0 {
+                        best_child = c;
+                    }
                 }
-                if smallest != idx {
-                    self.data.swap(idx, smallest);
-                    idx = smallest;
+                if self.data[best_child].0 < self.data[idx].0 {
+                    self.data.swap(idx, best_child);
+                    idx = best_child;
                 } else {
                     break;
                 }
@@ -91,7 +93,7 @@ impl MinHeap {
 struct SearchState {
     distance: Vec<u64>,
     seen: Vec<u32>,
-    heap: MinHeap,
+    heap: QuadHeap,
 }
 
 impl SearchState {
@@ -99,7 +101,7 @@ impl SearchState {
         Self {
             distance: vec![0u64; n],
             seen: vec![0u32; n],
-            heap: MinHeap::with_capacity(65536),
+            heap: QuadHeap::with_capacity(32768),
         }
     }
 
@@ -138,6 +140,9 @@ fn settle(
     let end = offsets[node as usize + 1] as usize;
     for &edge in &edges[start..end] {
         let next_cost = cost + edge.weight as u64;
+        if next_cost >= *best {
+            continue;
+        }
         let to = edge.to as usize;
         if own.seen[to] != generation || next_cost < own.distance[to] {
             own.seen[to] = generation;
@@ -153,30 +158,30 @@ fn settle(
     }
 }
 
-fn map_file(path: &str) -> Option<(&'static [u8], usize)> {
+fn map_file(path: &str) -> Option<(&'static [u8], usize, *mut u8)> {
     let file = File::open(path).ok()?;
     let metadata = file.metadata().ok()?;
     let size = metadata.len() as usize;
     if size == 0 {
-        return Some((&[], 0));
+        return Some((&[], 0, std::ptr::null_mut()));
     }
     let ptr = unsafe { mmap(std::ptr::null_mut(), size, 1, 2, file.as_raw_fd(), 0) };
     if ptr == usize::MAX as *mut u8 {
         return None;
     }
     let slice = unsafe { std::slice::from_raw_parts(ptr, size) };
-    Some((slice, size))
+    Some((slice, size, ptr))
 }
 
 #[inline(always)]
-fn read_uint(data: &[u8], mut p: usize) -> (u32, usize) {
-    while p < data.len() && data[p] <= b' ' {
-        p += 1;
+unsafe fn read_uint(mut p: *const u8, end: *const u8) -> (u32, *const u8) {
+    while p < end && *p <= b' ' {
+        p = p.add(1);
     }
     let mut val: u32 = 0;
-    while p < data.len() && data[p] >= b'0' && data[p] <= b'9' {
-        val = val * 10 + (data[p] - b'0') as u32;
-        p += 1;
+    while p < end && *p >= b'0' && *p <= b'9' {
+        val = val * 10 + (*p - b'0') as u32;
+        p = p.add(1);
     }
     (val, p)
 }
@@ -194,8 +199,8 @@ fn main() {
         "data/d/queries.txt"
     };
 
-    let (graph_data, graph_size) = map_file(graph_path).expect("open graph");
-    let (queries_data, queries_size) = map_file(queries_path).expect("open queries");
+    let (_, graph_size, graph_ptr) = map_file(graph_path).expect("open graph");
+    let (queries_data, queries_size, _) = map_file(queries_path).expect("open queries");
 
     let output_path = if std::path::Path::new("/out").is_dir() {
         "/out/distances.txt"
@@ -209,23 +214,34 @@ fn main() {
         return;
     }
 
-    let (n, mut p) = read_uint(graph_data, 0);
-    let (m, next_p) = read_uint(graph_data, p);
-    p = next_p;
-
-    let edges_start = p;
+    let g_end = unsafe { graph_ptr.add(graph_size) };
+    let (n, p) = unsafe { read_uint(graph_ptr, g_end) };
+    let (m, mut p) = unsafe { read_uint(p, g_end) };
 
     let n_usize = n as usize;
+    let m_usize = m as usize;
+
     let mut offsets = vec![0u32; n_usize + 1];
     let mut rev_offsets = vec![0u32; n_usize + 1];
 
-    for _ in 0..m {
-        let (u, next_p) = read_uint(graph_data, p);
-        let (v, next_p2) = read_uint(graph_data, next_p);
-        let (_, next_p3) = read_uint(graph_data, next_p2);
-        p = next_p3;
-        offsets[u as usize + 1] += 1;
-        rev_offsets[v as usize + 1] += 1;
+    #[derive(Clone, Copy)]
+    struct RawEdge {
+        u: u32,
+        v: u32,
+        w: u32,
+    }
+    let mut raw = vec![RawEdge { u: 0, v: 0, w: 0 }; m_usize];
+
+    unsafe {
+        for i in 0..m_usize {
+            let (u, next_p) = read_uint(p, g_end);
+            let (v, next_p2) = read_uint(next_p, g_end);
+            let (w, next_p3) = read_uint(next_p2, g_end);
+            p = next_p3;
+            raw[i] = RawEdge { u, v, w };
+            offsets[u as usize + 1] += 1;
+            rev_offsets[v as usize + 1] += 1;
+        }
     }
 
     for i in 1..=n_usize {
@@ -236,41 +252,32 @@ fn main() {
     let mut cursor = offsets.clone();
     let mut rev_cursor = rev_offsets.clone();
 
-    let dummy_edge = Edge { to: 0, weight: 0 };
-    let mut edges = vec![dummy_edge; m as usize];
-    let mut rev_edges = vec![dummy_edge; m as usize];
+    let mut edges = vec![Edge { to: 0, weight: 0 }; m_usize];
+    let mut rev_edges = vec![Edge { to: 0, weight: 0 }; m_usize];
 
-    p = edges_start;
-    for _ in 0..m {
-        let (u, next_p) = read_uint(graph_data, p);
-        let (v, next_p2) = read_uint(graph_data, next_p);
-        let (w, next_p3) = read_uint(graph_data, next_p2);
-        p = next_p3;
+    for e in raw {
+        let pos = cursor[e.u as usize] as usize;
+        cursor[e.u as usize] += 1;
+        edges[pos] = Edge { to: e.v, weight: e.w };
 
-        let pos = cursor[u as usize] as usize;
-        cursor[u as usize] += 1;
-        edges[pos] = Edge { to: v, weight: w };
-
-        let rev_pos = rev_cursor[v as usize] as usize;
-        rev_cursor[v as usize] += 1;
-        rev_edges[rev_pos] = Edge { to: u, weight: w };
+        let rev_pos = rev_cursor[e.v as usize] as usize;
+        rev_cursor[e.v as usize] += 1;
+        rev_edges[rev_pos] = Edge { to: e.u, weight: e.w };
     }
     drop(cursor);
     drop(rev_cursor);
 
     // Read queries
-    let mut work = Vec::with_capacity(100_000);
-    p = 0;
-    while p < queries_size {
-        while p < queries_size && queries_data[p] <= b' ' {
-            p += 1;
-        }
-        if p >= queries_size {
+    let mut work = Vec::with_capacity(10_000);
+    let mut qp = queries_data.as_ptr();
+    let q_end = unsafe { qp.add(queries_size) };
+    while qp < q_end {
+        let (src, next_qp) = unsafe { read_uint(qp, q_end) };
+        if next_qp >= q_end {
             break;
         }
-        let (src, next_p) = read_uint(queries_data, p);
-        let (dst, next_p2) = read_uint(queries_data, next_p);
-        p = next_p2;
+        let (dst, next_qp2) = unsafe { read_uint(next_qp, q_end) };
+        qp = next_qp2;
         work.push((src, dst));
     }
 
@@ -357,7 +364,6 @@ fn main() {
                     }
                 }
 
-                // Store answer in AtomicI64
                 answers_ref[idx].store(answer, Ordering::Relaxed);
             }
         });
