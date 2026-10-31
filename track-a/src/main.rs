@@ -3,6 +3,7 @@ use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Barrier};
+use std::time::Instant;
 
 extern "C" {
     fn mmap(addr: *mut u8, length: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *mut u8;
@@ -153,7 +154,20 @@ fn write_u64_fast(mut n: u64, buf: &mut Vec<u8>) {
     buf.extend_from_slice(&tmp[i..]);
 }
 
+#[inline(always)]
+fn get_p50_p95_p99(slice: &mut [u32]) -> (u64, u64, u64) {
+    let count = slice.len();
+    if count > 1 {
+        slice.sort_unstable();
+    }
+    let p50 = slice[(50 * count + 99) / 100 - 1] as u64;
+    let p95 = slice[(95 * count + 99) / 100 - 1] as u64;
+    let p99 = slice[(99 * count + 99) / 100 - 1] as u64;
+    (p50, p95, p99)
+}
+
 fn main() {
+    let t_start = Instant::now();
     let input_path = if std::path::Path::new("/data/requests.log").exists() {
         "/data/requests.log"
     } else {
@@ -178,7 +192,7 @@ fn main() {
         return;
     }
 
-    let ptr = unsafe { mmap(std::ptr::null_mut(), total_size, 1, 1, file.as_raw_fd(), 0) }; // MAP_SHARED (1)
+    let ptr = unsafe { mmap(std::ptr::null_mut(), total_size, 1, 1, file.as_raw_fd(), 0) }; // MAP_SHARED
     if ptr == usize::MAX as *mut u8 {
         std::process::exit(1);
     }
@@ -216,7 +230,6 @@ fn main() {
     let errors_ref = Arc::new(global_errors);
     let cursors_ref = Arc::new(write_cursors);
 
-    // Precompute hour strings
     let mut hour_strings: Vec<String> = Vec::with_capacity(NUM_SLOTS);
     for slot in 0..NUM_SLOTS {
         let (month, day, clock_hour) = if slot < 6 {
@@ -260,11 +273,11 @@ fn main() {
 
         let handle = std::thread::spawn(move || {
             let base = raw_ptr as *const u8;
+            let mut local_cache = [LocalCacheEntry { hash: 0, offset: 0, len: 0, id: 0 }; 1024];
+
+            // PASS 1: Count & Intern
             let mut p = unsafe { base.add(start) };
             let p_end = unsafe { base.add(end) };
-
-            let mut items = Vec::with_capacity((end - start) / 44 + 100);
-            let mut local_cache = [LocalCacheEntry { hash: 0, offset: 0, len: 0, id: 0 }; 1024];
 
             unsafe {
                 while p < p_end {
@@ -276,7 +289,7 @@ fn main() {
                         if *p.add(9) == b'1' { hour + 30 } else { hour + 54 }
                     };
 
-                    p = p.add(28); // timestamp + space
+                    p = p.add(28);
                     let method_len = if *p.add(3) == b' ' { 4 }
                     else if *p.add(4) == b' ' { 5 }
                     else if *p.add(5) == b' ' { 6 }
@@ -287,18 +300,13 @@ fn main() {
                     let (ep_len, h) = find_space_and_hash(p);
                     let ep_bytes = std::slice::from_raw_parts(p, ep_len);
                     let ep_offset = p.offset_from(base) as u32;
-                    p = p.add(ep_len + 1); // endpoint + space
+                    p = p.add(ep_len + 1);
 
                     let is_5xx = *p == b'5';
-                    p = p.add(4); // status + space
+                    p = p.add(4);
 
-                    let mut lat = (*p - b'0') as u32;
+                    while *p != b'\n' { p = p.add(1); }
                     p = p.add(1);
-                    while *p != b'\n' {
-                        lat = lat * 10 + (*p - b'0') as u32;
-                        p = p.add(1);
-                    }
-                    p = p.add(1); // skip '\n'
 
                     let ep_id = intern_endpoint_fast(h, ep_bytes, ep_offset, base, &t_table, &t_next, &mut local_cache);
                     let g = (slot as usize) * MAX_ENDPOINTS + (ep_id as usize);
@@ -307,7 +315,6 @@ fn main() {
                     if is_5xx {
                         t_errors[g].fetch_add(1, Ordering::Relaxed);
                     }
-                    items.push(((g as u64) << 32) | (lat as u64));
                 }
             }
 
@@ -345,43 +352,60 @@ fn main() {
 
             bar.wait();
 
-            let lat_vec = unsafe { &*(all_latencies_ptr as *const Vec<u32>) };
-            let lat_base = lat_vec.as_ptr() as *mut u32;
+            // PASS 2: Re-scan and direct scatter
+            let lat_vec = unsafe { &mut *(all_latencies_ptr as *mut Vec<u32>) };
+            let lat_base = lat_vec.as_mut_ptr();
+            p = unsafe { base.add(start) };
 
-            for item in items {
-                let g = (item >> 32) as usize;
-                let lat = item as u32;
-                let pos = t_cursors[g].fetch_add(1, Ordering::Relaxed) as usize;
-                unsafe {
+            unsafe {
+                while p < p_end {
+                    let month = *p.add(6);
+                    let hour = (*p.add(11) - b'0') as u32 * 10 + (*p.add(12) - b'0') as u32;
+                    let slot = if month == b'0' {
+                        if *p.add(9) == b'0' { hour - 18 } else { hour + 6 }
+                    } else {
+                        if *p.add(9) == b'1' { hour + 30 } else { hour + 54 }
+                    };
+
+                    p = p.add(28);
+                    let method_len = if *p.add(3) == b' ' { 4 }
+                    else if *p.add(4) == b' ' { 5 }
+                    else if *p.add(5) == b' ' { 6 }
+                    else if *p.add(6) == b' ' { 7 }
+                    else { 8 };
+                    p = p.add(method_len);
+
+                    let (ep_len, h) = find_space_and_hash(p);
+                    let ep_bytes = std::slice::from_raw_parts(p, ep_len);
+                    let ep_offset = p.offset_from(base) as u32;
+                    p = p.add(ep_len + 5); // ep + space + status + space
+
+                    let mut lat = (*p - b'0') as u32;
+                    p = p.add(1);
+                    while *p != b'\n' {
+                        lat = lat * 10 + (*p - b'0') as u32;
+                        p = p.add(1);
+                    }
+                    p = p.add(1);
+
+                    let ep_id = intern_endpoint_fast(h, ep_bytes, ep_offset, base, &t_table, &t_next, &mut local_cache);
+                    let g = (slot as usize) * MAX_ENDPOINTS + (ep_id as usize);
+
+                    let pos = t_cursors[g].fetch_add(1, Ordering::Relaxed) as usize;
                     *lat_base.add(pos) = lat;
                 }
             }
 
             bar.wait();
 
+            // PASS 3: Partition percentiles and format (combined, cache-resident!)
             let off_slice = unsafe { std::slice::from_raw_parts(offsets_ptr as *const usize, TOTAL_GROUPS + 1) };
-            let groups_per_thread = (TOTAL_GROUPS + num_threads - 1) / num_threads;
-            let g_start = (thread_id * groups_per_thread).min(TOTAL_GROUPS);
-            let g_end = ((thread_id + 1) * groups_per_thread).min(TOTAL_GROUPS);
-
-            for g in g_start..g_end {
-                let start = off_slice[g];
-                let end = off_slice[g + 1];
-                if end > start + 1 {
-                    let slice = unsafe { std::slice::from_raw_parts_mut(lat_base.add(start), end - start) };
-                    slice.sort_unstable();
-                }
-            }
-
-            bar.wait();
-
             let slots_per_thread = (NUM_SLOTS + num_threads - 1) / num_threads;
             let s_start = (thread_id * slots_per_thread).min(NUM_SLOTS);
             let s_end = ((thread_id + 1) * slots_per_thread).min(NUM_SLOTS);
             let ep_store = unsafe { &*(ep_slices_ptr as *const Vec<(usize, usize, usize)>) };
 
             let mut buf = Vec::with_capacity(512 * 1024);
-            let all_lats = unsafe { std::slice::from_raw_parts(lat_base, off_slice[TOTAL_GROUPS]) };
 
             for slot in s_start..s_end {
                 let hour_bytes = t_hours[slot].as_bytes();
@@ -393,11 +417,9 @@ fn main() {
                     }
                     let start = off_slice[g];
                     let end = off_slice[g + 1];
-                    let values = &all_lats[start..end];
+                    let group_slice = unsafe { std::slice::from_raw_parts_mut(lat_base.add(start), end - start) };
 
-                    let p50 = values[(50 * count + 99) / 100 - 1] as u64;
-                    let p95 = values[(95 * count + 99) / 100 - 1] as u64;
-                    let p99 = values[(99 * count + 99) / 100 - 1] as u64;
+                    let (p50, p95, p99) = get_p50_p95_p99(group_slice);
 
                     let errors = t_errors[g].load(Ordering::Relaxed) as u64;
                     let error_rate = errors * 1_000_000 / count as u64;
@@ -438,4 +460,5 @@ fn main() {
     for chunk in out_chunks {
         out_file.write_all(&chunk).expect("write chunk");
     }
+
 }
