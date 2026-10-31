@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 
 extern "C" {
     fn mmap(addr: *mut u8, length: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *mut u8;
@@ -30,7 +30,28 @@ struct LocalCacheEntry {
 }
 
 #[inline(always)]
-fn intern_endpoint_fused(
+unsafe fn find_space_and_hash(mut p: *const u8) -> (usize, u32) {
+    let p_start = p;
+    let mut h: u64 = 0xcbf29ce484222325;
+
+    loop {
+        let w = (p as *const u64).read_unaligned();
+        let v = w ^ 0x2020202020202020;
+        let zero_mask = v.wrapping_sub(0x0101010101010101) & (!v) & 0x8080808080808080;
+        if zero_mask != 0 {
+            let add_len = (zero_mask.trailing_zeros() >> 3) as usize;
+            let valid_mask = if add_len == 8 { u64::MAX } else { (1u64 << (add_len * 8)) - 1 };
+            h = (h ^ (w & valid_mask)).wrapping_mul(0x100000001b3);
+            let total_len = p.offset_from(p_start) as usize + add_len;
+            return (total_len, (h ^ (h >> 32)) as u32);
+        }
+        h = (h ^ w).wrapping_mul(0x100000001b3);
+        p = p.add(8);
+    }
+}
+
+#[inline(always)]
+fn intern_endpoint_fast(
     h: u32,
     ep_bytes: &[u8],
     ep_offset: u32,
@@ -157,7 +178,7 @@ fn main() {
         return;
     }
 
-    let ptr = unsafe { mmap(std::ptr::null_mut(), total_size, 1, 2, file.as_raw_fd(), 0) };
+    let ptr = unsafe { mmap(std::ptr::null_mut(), total_size, 1, 1, file.as_raw_fd(), 0) }; // MAP_SHARED (1)
     if ptr == usize::MAX as *mut u8 {
         std::process::exit(1);
     }
@@ -187,167 +208,13 @@ fn main() {
 
     let global_counts: Vec<AtomicU32> = (0..TOTAL_GROUPS).map(|_| AtomicU32::new(0)).collect();
     let global_errors: Vec<AtomicU32> = (0..TOTAL_GROUPS).map(|_| AtomicU32::new(0)).collect();
+    let write_cursors: Vec<AtomicU32> = (0..TOTAL_GROUPS).map(|_| AtomicU32::new(0)).collect();
 
     let table_ref = Arc::new(atomic_table);
     let next_id_ref = Arc::new(next_ep_id);
     let counts_ref = Arc::new(global_counts);
     let errors_ref = Arc::new(global_errors);
-
-    let mut parse_handles = Vec::with_capacity(num_threads);
-
-    for i in 0..num_threads {
-        let start = boundaries[i];
-        let end = boundaries[i + 1];
-        let t_table = Arc::clone(&table_ref);
-        let t_next = Arc::clone(&next_id_ref);
-        let t_counts = Arc::clone(&counts_ref);
-        let t_errors = Arc::clone(&errors_ref);
-
-        let handle = std::thread::spawn(move || {
-            let base = raw_ptr as *const u8;
-            let mut p = unsafe { base.add(start) };
-            let p_end = unsafe { base.add(end) };
-
-            let mut items = Vec::with_capacity((end - start) / 25);
-            let mut local_cache = [LocalCacheEntry { hash: 0, offset: 0, len: 0, id: 0 }; 1024];
-
-            unsafe {
-                while p < p_end {
-                    let month = *p.add(6);
-                    let day = (*p.add(8) - b'0') as u32 * 10 + (*p.add(9) - b'0') as u32;
-                    let hour = (*p.add(11) - b'0') as u32 * 10 + (*p.add(12) - b'0') as u32;
-                    let slot = if month == b'0' {
-                        (day - 30) * 24 + hour - 18
-                    } else {
-                        30 + (day - 1) * 24 + hour
-                    };
-
-                    p = p.add(28); // timestamp + space
-                    while *p != b' ' { p = p.add(1); }
-                    p = p.add(1); // method + space
-
-                    let ep_start = p;
-                    let mut h: u32 = 0x811c9dc5;
-                    while *p != b' ' {
-                        h = (h ^ (*p as u32)).wrapping_mul(0x01000193);
-                        p = p.add(1);
-                    }
-                    let ep_len = p.offset_from(ep_start) as usize;
-                    let ep_bytes = std::slice::from_raw_parts(ep_start, ep_len);
-                    let ep_offset = ep_start.offset_from(base) as u32;
-                    p = p.add(1); // endpoint + space
-
-                    let is_5xx = *p == b'5';
-                    p = p.add(4); // status + space
-
-                    let mut lat: u32 = 0;
-                    while p < p_end && *p >= b'0' && *p <= b'9' {
-                        lat = lat * 10 + (*p - b'0') as u32;
-                        p = p.add(1);
-                    }
-                    if p < p_end && *p == b'\r' { p = p.add(1); }
-                    if p < p_end && *p == b'\n' { p = p.add(1); }
-
-                    let ep_id = intern_endpoint_fused(h, ep_bytes, ep_offset, base, &t_table, &t_next, &mut local_cache);
-                    let g = (slot as usize) * MAX_ENDPOINTS + (ep_id as usize);
-
-                    t_counts[g].fetch_add(1, Ordering::Relaxed);
-                    if is_5xx {
-                        t_errors[g].fetch_add(1, Ordering::Relaxed);
-                    }
-                    items.push(((g as u64) << 32) | (lat as u64));
-                }
-            }
-
-            items
-        });
-        parse_handles.push(handle);
-    }
-
-    let mut thread_items = Vec::with_capacity(num_threads);
-    for h in parse_handles {
-        thread_items.push(h.join().unwrap());
-    }
-
-    let num_endpoints = next_id_ref.load(Ordering::Relaxed) as usize;
-
-    let base_ptr = raw_ptr as *const u8;
-    let mut ep_slices: Vec<(usize, &[u8])> = Vec::with_capacity(num_endpoints);
-    for slot in table_ref.iter() {
-        let id_val = slot.id.load(Ordering::Relaxed);
-        if id_val > 0 {
-            let id = (id_val - 1) as usize;
-            let off = slot.offset.load(Ordering::Relaxed) as usize;
-            let len = slot.len.load(Ordering::Relaxed) as usize;
-            let slice = unsafe { std::slice::from_raw_parts(base_ptr.add(off), len) };
-            ep_slices.push((id, slice));
-        }
-    }
-    ep_slices.sort_unstable_by(|a, b| a.1.cmp(b.1));
-
-    // Prefix sum over TOTAL_GROUPS to get offsets
-    let mut offsets = vec![0usize; TOTAL_GROUPS + 1];
-    for g in 0..TOTAL_GROUPS {
-        offsets[g + 1] = offsets[g] + counts_ref[g].load(Ordering::Relaxed) as usize;
-    }
-    let total_records = offsets[TOTAL_GROUPS];
-
-    let mut all_latencies = vec![0u32; total_records];
-    let lat_ptr = all_latencies.as_mut_ptr() as usize;
-
-    // Initialize atomic write cursors from offsets
-    let write_cursors: Vec<AtomicU32> = (0..TOTAL_GROUPS)
-        .map(|g| AtomicU32::new(offsets[g] as u32))
-        .collect();
     let cursors_ref = Arc::new(write_cursors);
-
-    // Parallel scatter using atomic fetch_add
-    let mut scatter_handles = Vec::with_capacity(num_threads);
-    for items in thread_items {
-        let c_ref = Arc::clone(&cursors_ref);
-        let handle = std::thread::spawn(move || {
-            let base = lat_ptr as *mut u32;
-            for item in items {
-                let g = (item >> 32) as usize;
-                let lat = item as u32;
-                let pos = c_ref[g].fetch_add(1, Ordering::Relaxed) as usize;
-                unsafe {
-                    *base.add(pos) = lat;
-                }
-            }
-        });
-        scatter_handles.push(handle);
-    }
-    for h in scatter_handles {
-        h.join().unwrap();
-    }
-    drop(cursors_ref);
-
-    // Parallel sort of group slices
-    let groups_per_thread = (TOTAL_GROUPS + num_threads - 1) / num_threads;
-    let mut sort_handles = Vec::with_capacity(num_threads);
-    let offsets_arc = Arc::new(offsets);
-
-    for t in 0..num_threads {
-        let g_start = (t * groups_per_thread).min(TOTAL_GROUPS);
-        let g_end = ((t + 1) * groups_per_thread).min(TOTAL_GROUPS);
-        let off_ref = Arc::clone(&offsets_arc);
-        let handle = std::thread::spawn(move || {
-            let base = lat_ptr as *mut u32;
-            for g in g_start..g_end {
-                let start = off_ref[g];
-                let end = off_ref[g + 1];
-                if end > start + 1 {
-                    let slice = unsafe { std::slice::from_raw_parts_mut(base.add(start), end - start) };
-                    slice.sort_unstable();
-                }
-            }
-        });
-        sort_handles.push(handle);
-    }
-    for h in sort_handles {
-        h.join().unwrap();
-    }
 
     // Precompute hour strings
     let mut hour_strings: Vec<String> = Vec::with_capacity(NUM_SLOTS);
@@ -363,44 +230,178 @@ fn main() {
         };
         hour_strings.push(format!("2026-{:02}-{:02}T{:02}:00:00Z", month, day, clock_hour));
     }
-
-    // Parallel formatting across NUM_SLOTS (72 slots)
-    let slots_per_thread = (NUM_SLOTS + num_threads - 1) / num_threads;
-    let ep_slices_arc = Arc::new(ep_slices);
     let hour_strings_arc = Arc::new(hour_strings);
-    let all_latencies_arc = Arc::new(all_latencies);
 
-    let mut format_handles = Vec::with_capacity(num_threads);
-    for t in 0..num_threads {
-        let s_start = (t * slots_per_thread).min(NUM_SLOTS);
-        let s_end = ((t + 1) * slots_per_thread).min(NUM_SLOTS);
-        let ep_s = Arc::clone(&ep_slices_arc);
-        let h_s = Arc::clone(&hour_strings_arc);
-        let lats = Arc::clone(&all_latencies_arc);
-        let offs = Arc::clone(&offsets_arc);
-        let cnts = Arc::clone(&counts_ref);
-        let errs = Arc::clone(&errors_ref);
+    let barrier = Arc::new(Barrier::new(num_threads));
+    let mut offsets = vec![0usize; TOTAL_GROUPS + 1];
+    let offsets_ptr = offsets.as_mut_ptr() as usize;
+
+    let mut all_latencies: Vec<u32> = Vec::new();
+    let all_latencies_ptr = &mut all_latencies as *mut Vec<u32> as usize;
+
+    let mut ep_slices_store: Vec<(usize, usize, usize)> = Vec::with_capacity(MAX_ENDPOINTS);
+    let ep_slices_ptr = &mut ep_slices_store as *mut Vec<(usize, usize, usize)> as usize;
+
+    let mut out_chunks: Vec<Vec<u8>> = (0..num_threads).map(|_| Vec::new()).collect();
+    let out_chunks_ptr = out_chunks.as_mut_ptr() as usize;
+
+    let mut handles = Vec::with_capacity(num_threads);
+
+    for thread_id in 0..num_threads {
+        let start = boundaries[thread_id];
+        let end = boundaries[thread_id + 1];
+        let t_table = Arc::clone(&table_ref);
+        let t_next = Arc::clone(&next_id_ref);
+        let t_counts = Arc::clone(&counts_ref);
+        let t_errors = Arc::clone(&errors_ref);
+        let t_cursors = Arc::clone(&cursors_ref);
+        let t_hours = Arc::clone(&hour_strings_arc);
+        let bar = Arc::clone(&barrier);
 
         let handle = std::thread::spawn(move || {
+            let base = raw_ptr as *const u8;
+            let mut p = unsafe { base.add(start) };
+            let p_end = unsafe { base.add(end) };
+
+            let mut items = Vec::with_capacity((end - start) / 44 + 100);
+            let mut local_cache = [LocalCacheEntry { hash: 0, offset: 0, len: 0, id: 0 }; 1024];
+
+            unsafe {
+                while p < p_end {
+                    let month = *p.add(6);
+                    let hour = (*p.add(11) - b'0') as u32 * 10 + (*p.add(12) - b'0') as u32;
+                    let slot = if month == b'0' {
+                        if *p.add(9) == b'0' { hour - 18 } else { hour + 6 }
+                    } else {
+                        if *p.add(9) == b'1' { hour + 30 } else { hour + 54 }
+                    };
+
+                    p = p.add(28); // timestamp + space
+                    let method_len = if *p.add(3) == b' ' { 4 }
+                    else if *p.add(4) == b' ' { 5 }
+                    else if *p.add(5) == b' ' { 6 }
+                    else if *p.add(6) == b' ' { 7 }
+                    else { 8 };
+                    p = p.add(method_len);
+
+                    let (ep_len, h) = find_space_and_hash(p);
+                    let ep_bytes = std::slice::from_raw_parts(p, ep_len);
+                    let ep_offset = p.offset_from(base) as u32;
+                    p = p.add(ep_len + 1); // endpoint + space
+
+                    let is_5xx = *p == b'5';
+                    p = p.add(4); // status + space
+
+                    let mut lat = (*p - b'0') as u32;
+                    p = p.add(1);
+                    while *p != b'\n' {
+                        lat = lat * 10 + (*p - b'0') as u32;
+                        p = p.add(1);
+                    }
+                    p = p.add(1); // skip '\n'
+
+                    let ep_id = intern_endpoint_fast(h, ep_bytes, ep_offset, base, &t_table, &t_next, &mut local_cache);
+                    let g = (slot as usize) * MAX_ENDPOINTS + (ep_id as usize);
+
+                    t_counts[g].fetch_add(1, Ordering::Relaxed);
+                    if is_5xx {
+                        t_errors[g].fetch_add(1, Ordering::Relaxed);
+                    }
+                    items.push(((g as u64) << 32) | (lat as u64));
+                }
+            }
+
+            bar.wait();
+
+            if thread_id == 0 {
+                let off_slice = unsafe { std::slice::from_raw_parts_mut(offsets_ptr as *mut usize, TOTAL_GROUPS + 1) };
+                for g in 0..TOTAL_GROUPS {
+                    let cnt = t_counts[g].load(Ordering::Relaxed) as usize;
+                    off_slice[g + 1] = off_slice[g] + cnt;
+                    t_cursors[g].store(off_slice[g] as u32, Ordering::Relaxed);
+                }
+
+                let total_records = off_slice[TOTAL_GROUPS];
+                let lat_vec = unsafe { &mut *(all_latencies_ptr as *mut Vec<u32>) };
+                lat_vec.resize(total_records, 0);
+
+                let store = unsafe { &mut *(ep_slices_ptr as *mut Vec<(usize, usize, usize)>) };
+                store.clear();
+                for slot in t_table.iter() {
+                    let id_val = slot.id.load(Ordering::Relaxed);
+                    if id_val > 0 {
+                        let id = (id_val - 1) as usize;
+                        let off = slot.offset.load(Ordering::Relaxed) as usize;
+                        let len = slot.len.load(Ordering::Relaxed) as usize;
+                        store.push((id, off, len));
+                    }
+                }
+                store.sort_unstable_by(|a, b| {
+                    let sa = unsafe { std::slice::from_raw_parts(base.add(a.1), a.2) };
+                    let sb = unsafe { std::slice::from_raw_parts(base.add(b.1), b.2) };
+                    sa.cmp(sb)
+                });
+            }
+
+            bar.wait();
+
+            let lat_vec = unsafe { &*(all_latencies_ptr as *const Vec<u32>) };
+            let lat_base = lat_vec.as_ptr() as *mut u32;
+
+            for item in items {
+                let g = (item >> 32) as usize;
+                let lat = item as u32;
+                let pos = t_cursors[g].fetch_add(1, Ordering::Relaxed) as usize;
+                unsafe {
+                    *lat_base.add(pos) = lat;
+                }
+            }
+
+            bar.wait();
+
+            let off_slice = unsafe { std::slice::from_raw_parts(offsets_ptr as *const usize, TOTAL_GROUPS + 1) };
+            let groups_per_thread = (TOTAL_GROUPS + num_threads - 1) / num_threads;
+            let g_start = (thread_id * groups_per_thread).min(TOTAL_GROUPS);
+            let g_end = ((thread_id + 1) * groups_per_thread).min(TOTAL_GROUPS);
+
+            for g in g_start..g_end {
+                let start = off_slice[g];
+                let end = off_slice[g + 1];
+                if end > start + 1 {
+                    let slice = unsafe { std::slice::from_raw_parts_mut(lat_base.add(start), end - start) };
+                    slice.sort_unstable();
+                }
+            }
+
+            bar.wait();
+
+            let slots_per_thread = (NUM_SLOTS + num_threads - 1) / num_threads;
+            let s_start = (thread_id * slots_per_thread).min(NUM_SLOTS);
+            let s_end = ((thread_id + 1) * slots_per_thread).min(NUM_SLOTS);
+            let ep_store = unsafe { &*(ep_slices_ptr as *const Vec<(usize, usize, usize)>) };
+
             let mut buf = Vec::with_capacity(512 * 1024);
+            let all_lats = unsafe { std::slice::from_raw_parts(lat_base, off_slice[TOTAL_GROUPS]) };
+
             for slot in s_start..s_end {
-                let hour_bytes = h_s[slot].as_bytes();
-                for &(orig_id, ep_slice) in ep_s.iter() {
+                let hour_bytes = t_hours[slot].as_bytes();
+                for &(orig_id, ep_off, ep_len) in ep_store.iter() {
                     let g = slot * MAX_ENDPOINTS + orig_id;
-                    let count = cnts[g].load(Ordering::Relaxed) as usize;
+                    let count = t_counts[g].load(Ordering::Relaxed) as usize;
                     if count == 0 {
                         continue;
                     }
-                    let start = offs[g];
-                    let end = offs[g + 1];
-                    let values = &lats[start..end];
+                    let start = off_slice[g];
+                    let end = off_slice[g + 1];
+                    let values = &all_lats[start..end];
 
                     let p50 = values[(50 * count + 99) / 100 - 1] as u64;
                     let p95 = values[(95 * count + 99) / 100 - 1] as u64;
                     let p99 = values[(99 * count + 99) / 100 - 1] as u64;
 
-                    let errors = errs[g].load(Ordering::Relaxed) as u64;
+                    let errors = t_errors[g].load(Ordering::Relaxed) as u64;
                     let error_rate = errors * 1_000_000 / count as u64;
+                    let ep_slice = unsafe { std::slice::from_raw_parts(base.add(ep_off), ep_len) };
 
                     buf.extend_from_slice(hour_bytes);
                     buf.push(b' ');
@@ -420,14 +421,21 @@ fn main() {
                     buf.push(b'\n');
                 }
             }
-            buf
+
+            unsafe {
+                let out_ptr = (out_chunks_ptr as *mut Vec<u8>).add(thread_id);
+                *out_ptr = buf;
+            }
         });
-        format_handles.push(handle);
+        handles.push(handle);
+    }
+
+    for h in handles {
+        h.join().unwrap();
     }
 
     let mut out_file = File::create(output_path).expect("create out");
-    for h in format_handles {
-        let chunk = h.join().unwrap();
+    for chunk in out_chunks {
         out_file.write_all(&chunk).expect("write chunk");
     }
 }
