@@ -28,3 +28,8 @@ None.
 
 Profile the parser and name lookup separately on the scoring box, then compare
 worker counts and table capacities under the cgroup memory metric.
+
+Record integers use a bounded eight-byte decimal fast path, with scalar handling
+for longer values and short file tails. The independent CSV oracle in
+`tests/test_join.py` checks quoting, collision equality, integer lengths, byte
+counts, distinct names and signed money against direct Python aggregation.

@@ -34,6 +34,23 @@ static inline uint32_t read_uint(const char *&p) {
     return n;
 }
 
+static inline uint32_t read_record_uint(const char *&p, const char *end) {
+    if (end - p < 8) return read_uint(p);
+    uint64_t bytes; memcpy(&bytes, p, 8);
+    // The first high bit marks a byte outside ASCII 0..9. Cross-byte carries
+    // cannot change the first marked byte, whose preceding bytes are digits.
+    uint64_t stop = ((bytes + 0x4646464646464646ULL) | (bytes - 0x3030303030303030ULL)) & 0x8080808080808080ULL;
+    unsigned n = stop ? __builtin_ctzll(stop) / 8 : 8;
+    if (!n) return 0;
+    uint64_t value = (bytes & 0x0f0f0f0f0f0f0f0fULL) << ((8 - n) * 8);
+    value = (value * 10 + (value >> 8)) & 0x00ff00ff00ff00ffULL;
+    value = (value * 100 + (value >> 16)) & 0x0000ffff0000ffffULL;
+    uint32_t result = uint32_t(value * 10000 + (value >> 32));
+    p += n;
+    while (*p >= '0' && *p <= '9') result = result * 10 + (*p++ - '0');
+    return result;
+}
+
 struct Field { string_view raw; uint32_t bytes; };
 static inline Field read_text(const char *&p, const char *end) {
     if (*p != '"') {
@@ -156,17 +173,17 @@ int main() {
 
         while (cursor < finish) {
             if (end - cursor >= 3 && (unsigned char)cursor[0] == 0xEF && (unsigned char)cursor[1] == 0xBB && (unsigned char)cursor[2] == 0xBF) cursor += 3;
-            uint32_t id = read_uint(cursor);
+            uint32_t id = read_record_uint(cursor, end);
             ++cursor;
             Field name = read_text(cursor, end);
             ++cursor;
             Field note = read_text(cursor, end);
             ++cursor;
-            uint32_t region = read_uint(cursor);
+            uint32_t region = read_record_uint(cursor, end);
             ++cursor;
             bool negative = *cursor == '-';
             if (negative) ++cursor;
-            int32_t cents = read_uint(cursor) * 100;
+            int32_t cents = read_record_uint(cursor, end) * 100;
             ++cursor;
             cents += (*cursor++ - '0') * 10;
             cents += *cursor++ - '0';

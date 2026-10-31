@@ -50,3 +50,13 @@ The submitted radix-only version passes the full public hash, official seed-17
 tiny reference, and 1,150 independent heapq-oracle queries, including duplicate,
 parallel and zero-weight edges, isolated nodes and sums exceeding uint32.
 Official run ID and K remain pending.
+
+Official confirmation for the radix-only version: `run-a361068428ee` at
+`1a14f38` measured 1.144292 s, 277,512,192 bytes, S=312, K=7.479621 and
+43.693980 points, passing all gates.
+
+A further on-the-fly bidirectional degree-two chain shortcut experiment passed
+the public hash, seed-17 tiny and independent heapq oracle. It was rejected:
+five alternating local runs gave 1.412830 s before and 1.568383 s after. The
+extra neighbourhood checks cost more than the heap operations they removed.
+The submitted radix-only implementation remains unchanged.

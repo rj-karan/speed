@@ -133,3 +133,8 @@ Five alternating local full-data process runs: original compact index middle-thr
 mean 0.692636 s; new 0.497411 s (28.2% reduction). These are local numbers, not a
 prediction of the official score. Full public hash, seed-2 sample, seed-17 tiny,
 and the independent 2,500-query oracle pass. Official K remains pending.
+
+Official confirmation: `run-3550441bc92b` at `e51a4bd` passed all gates with
+0.651392 s, 96,124,928 bytes, S=530, K=13.355666 and 56.283277 points. Compared
+with the previous compact-index run, time fell 35.1%; the measured coefficient
+improved despite the additional source and four-megabyte direct-lookup table.

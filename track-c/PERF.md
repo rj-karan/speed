@@ -72,3 +72,26 @@ in the board result.
 
 An additional official seed-7 sample reference also matches:
 `4a8b5533b3639d52e4bb82e622c0a03c071e3e4f7ea62c42fcb716d373602958`.
+
+Official confirmation for the inline-prefix version: `run-2134f4a745f2` at
+`1a14f38` measured 0.063414 s, 22,933,504 bytes, S=342, K=22.110772 and
+67.230195 points. All gates passed.
+
+## Packed integer parsing (board confirmation pending)
+
+Use bounded eight-byte integer parsing for record IDs, region IDs and amount
+whole parts. A SWAR mask locates the first non-digit; packed decimal reduction
+produces the exact integer. Values spanning eight bytes continue scalarly, and
+short file tails use the original reader. Money stays in integer cents.
+
+Five alternating local full-data process runs: previous middle-three mean
+0.044812 s, candidate 0.039446 s (12.0% reduction). The public full hash, official
+seed-7 sample and seed-17 tiny match. A 2,200-record independent oracle adds
+1–8-digit IDs, large id sums, mixed terminators, boundary BOMs, escaped quotes,
+embedded note newlines, empty/space-distinct names, deliberate packed-hash
+collisions, unmatched regions and negative amounts below one unit.
+
+Rejected before submission: routing names to exclusive shard owners passed hashes
+but slowed local mean 0.042174 → 0.071305 s and peaked around 56 MB. Splitting
+immutable keys and membership words into separate 32-byte tables also lost:
+0.056974 → 0.065962 s locally. Both were reverted; source and memory cost matter.
