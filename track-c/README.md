@@ -12,8 +12,8 @@ counts are stored per country. Names are interned once, with a 241-bit country
 membership mask per distinct name. Name keys refer to raw input slices: generated
 nonempty names are always quoted, so this is a one-to-one representation of the
 unescaped value; quoted and unquoted empty names both have an empty slice.
-An open-addressed table keeps those states contiguous. It resolves hash collisions
-with exact byte comparisons with 262,144 fixed slots for the specified 100,000-name pool.
+An open-addressed table keeps those states contiguous in 262,144 fixed slots
+for the specified 100,000-name pool. Exact byte comparisons resolve collisions.
 Up to twelve workers parse record-aligned ranges. A partition boundary follows an LF
 only when the next byte begins an id or boundary BOM; generated note lines start
 with lowercase letters. Workers share the name table; an atomic country-bit claim counts a

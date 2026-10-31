@@ -49,8 +49,11 @@ headers but stays far under the 2.2 GB reference.
 
 ## Anchored phrase verification and sparse Boolean operations (October 31)
 
-Board confirmation: pending for this commit. No local timing below is claimed as
-an official score. The previous best public run is `run-e061987e4a0a` at
+Board confirmation: `run-5be15848bfb6` at commit `f6f0c74` passed every gate.
+It measured 0.749897 s, 270,413,824 bytes, S=429, K=10.447687 and 50.951008
+machine points. Against the previous best, time fell 24.98%, peak memory fell
+4.81%, and K rose 15.08% despite the source increase. No local timing below is
+claimed as an official score. The previous best public run is `run-e061987e4a0a` at
 `abc2c95`: 0.999600 s, 284,090,368 bytes, S=393, K=9.078875, 47.901602 points.
 
 Replace the per-token phrase hash/window loop with an AVX2 first-byte search for
@@ -76,7 +79,7 @@ and lowest yielded:
 That is a 19.17% local reduction, not a prediction of the scoring CPU's gain.
 The phrase-only experiment initially measured 0.795288 → 0.707241 s. Local
 benchmarks do not measure the official cgroup peak or formatted source penalty;
-the board must confirm the resulting K before the change is considered a win.
+the official run above confirms that the combined coefficient improved.
 
 Correctness: full seed-1 output remains
 `f86973c210228141bcb6f1f1b10188ad2a9b65f71e7cd7cf4590b38de4e80927`;

@@ -49,8 +49,8 @@ the name's atomic 64-bit hash, pointer into the mapped CSV, length, and four
 atomic 64-bit country bitmasks. Upon seeing a name, threads perform a relaxed check
 on the country bitmask; if unset, an atomic `fetch_or` claims the bit and increments
 the thread-local country count if and only if the bit was previously unset. This
-scales seamlessly across 12 threads with zero serial merge phase and measured peak cgroup memory of 22.31 MB on the board (run-be3c6c1fdad8),
-with K=19.596345 and S=323.
+removes the serial name-merge phase. The board measured peak cgroup memory of
+22.31 MB (run-be3c6c1fdad8), with K=19.596345 and S=323.
 
 The seed-2 sample generated from the published generator also matched its Python
 reference output hash `f389938275df1b495a38c4375fe741795df180e64617e01e2cf77a95a56982a3`.

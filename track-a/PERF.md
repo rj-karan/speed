@@ -26,8 +26,9 @@ Step 7 was measured at commit `f09e076` as `run-e9b9677c692d`: 0.063711 s,
 and S=484, producing K=24.798634 and 69.721388 points. The extra per-worker
 arrays and cursor machinery did not pay for their memory and source-size cost.
 Restored `src/main.rs` byte-for-byte from `060f342`; its Dockerfile and manifest
-are unchanged. The new confirmation run is pending; the earlier run is evidence
-for the choice, not a measurement of this new commit. Full public hash and a
+are unchanged. The confirmation run `run-86226c1c0649` at `f6f0c74` passed every gate:
+0.062557 s, 29,454,336 bytes, S=484, K=24.660949 and 69.600489 points.
+This confirms the restored implementation beats the rejected cursor experiment. Full public hash and a
 seed-17 sample comparison against the official reference verify the restoration.
 
 Steps 2 and 3 cite the same run: they are not independent measured improvements.
