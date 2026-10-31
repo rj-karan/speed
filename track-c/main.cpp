@@ -1,5 +1,6 @@
 #include <array>
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <cstdint>
 #include <cstring>
@@ -13,6 +14,7 @@
 #include <thread>
 #include <unistd.h>
 #include <vector>
+
 using namespace std;
 
 struct Mapping { const char *data; size_t size; };
@@ -21,19 +23,19 @@ static Mapping map_file(const char *path) {
     if (fd < 0) return {nullptr, 0};
     struct stat st;
     if (fstat(fd, &st)) return {nullptr, 0};
-    void *p = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    void *p = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
     close(fd);
     return p == MAP_FAILED ? Mapping{nullptr, 0} : Mapping{static_cast<const char *>(p), size_t(st.st_size)};
 }
 
-static uint32_t read_uint(const char *&p) {
+static inline uint32_t read_uint(const char *&p) {
     uint32_t n = 0;
     while (*p >= '0' && *p <= '9') n = n * 10 + (*p++ - '0');
     return n;
 }
 
 struct Field { string_view raw; uint32_t bytes; };
-static Field read_text(const char *&p) {
+static inline Field read_text(const char *&p) {
     if (*p != '"') {
         const char *start = p;
         while (*p != ',') ++p;
@@ -64,40 +66,18 @@ static inline uint64_t name_hash(string_view name) {
     return h;
 }
 
-struct NameState { string_view name; uint64_t hash; array<uint64_t, 4> countries{}; };
+constexpr size_t GLOBAL_TABLE_CAP = 1 << 18; // 262,144 slots
+constexpr size_t GLOBAL_TABLE_MASK = GLOBAL_TABLE_CAP - 1;
 
-struct NameTable {
-    vector<NameState> slots = vector<NameState>(1 << 17);
-    size_t count = 0;
-    // The caller passes the precomputed hash so probing compares hashes first;
-    // a stored-hash mismatch skips the string compare, which would otherwise
-    // dereference the name back into the large read-only CSV mapping every probe.
-    array<uint64_t, 4> &find_or_insert(string_view name, uint64_t hash) {
-        if (count * 8 >= slots.size() * 7) {
-            vector<NameState> old = move(slots);
-            slots = vector<NameState>(old.size() * 2);
-            count = 0;
-            for (NameState &entry : old) {
-                if (entry.name.data()) find_or_insert(entry.name, entry.hash) = entry.countries;
-            }
-        }
-        size_t index = hash & (slots.size() - 1);
-        while (slots[index].name.data()) {
-            if (slots[index].hash == hash && slots[index].name == name) return slots[index].countries;
-            index = (index + 1) & (slots.size() - 1);
-        }
-        slots[index].name = name;
-        slots[index].hash = hash;
-        ++count;
-        return slots[index].countries;
-    }
+struct alignas(64) GlobalSlot {
+    atomic<uint64_t> hash{0};
+    const char *name_ptr{nullptr};
+    uint32_t name_len{0};
+    atomic<bool> ready{false};
+    atomic<uint64_t> countries[4]{};
 };
 
-struct WorkerData {
-    vector<Aggregate> groups;
-    NameTable names;
-    explicit WorkerData(size_t group_count) : groups(group_count) {}
-};
+static GlobalSlot global_table[GLOBAL_TABLE_CAP];
 
 static void unsigned_number(FILE *out, uint64_t value) {
     char buf[24]; auto end = to_chars(buf, buf + sizeof buf, value).ptr;
@@ -117,6 +97,7 @@ int main() {
     Mapping lookup = map_file("/data/regions.csv");
     Mapping records = map_file("/data/records.csv");
     if (!lookup.data || !records.data) return 1;
+
     constexpr uint16_t no_country = 65535;
     vector<uint16_t> regions(1000000, no_country);
     vector<uint16_t> code_to_index(26 * 26 * 26, no_country), country_codes;
@@ -135,8 +116,11 @@ int main() {
     p = records.data;
     end = p + records.size;
     while (p < end && *p++ != '\n') {} // Initial BOM and header.
-    constexpr size_t worker_count = 3;
-    array<const char *, worker_count + 1> bounds{};
+
+    const unsigned int hw_threads = thread::hardware_concurrency();
+    const size_t worker_count = hw_threads ? min(hw_threads, 12u) : 12;
+
+    vector<const char *> bounds(worker_count + 1);
     bounds[0] = p;
     bounds[worker_count] = end;
     for (size_t i = 1; i < worker_count; ++i) {
@@ -150,25 +134,20 @@ int main() {
             if (scan < end && *scan >= '1' && *scan <= '9') { bounds[i] = start; break; }
         }
     }
-    vector<WorkerData> states;
-    states.reserve(worker_count);
-    for (size_t i = 0; i < worker_count; ++i) states.emplace_back(unmatched + 1);
+
+    vector<vector<Aggregate>> thread_groups(worker_count, vector<Aggregate>(unmatched + 1));
+
     auto parse_range = [&](size_t worker) {
         const char *cursor = bounds[worker];
         const char *finish = bounds[worker + 1];
-        WorkerData &state = states[worker];
+        auto &local_groups = thread_groups[worker];
+
         while (cursor < finish) {
-            // Mid-file BOMs are legal only at the start of a record.
             if (end - cursor >= 3 && (unsigned char)cursor[0] == 0xEF && (unsigned char)cursor[1] == 0xBB && (unsigned char)cursor[2] == 0xBF) cursor += 3;
             uint32_t id = read_uint(cursor);
             ++cursor;
             Field name = read_text(cursor);
             ++cursor;
-            // Hash the name now and prefetch its table slot; the random DRAM miss
-            // then overlaps the note/region/amount parsing and aggregate updates
-            // below, which is where this track spends most of its time.
-            const uint64_t nhash = name_hash(name.raw);
-            __builtin_prefetch(&state.names.slots[nhash & (state.names.slots.size() - 1)]);
             Field note = read_text(cursor);
             ++cursor;
             uint32_t region = read_uint(cursor);
@@ -182,9 +161,10 @@ int main() {
             if (negative) cents = -cents;
             if (cursor < end && *cursor == '\r') ++cursor;
             if (cursor < end && *cursor == '\n') ++cursor;
+
             uint16_t key = region < regions.size() ? regions[region] : no_country;
             if (key == no_country) key = unmatched;
-            Aggregate &g = state.groups[key];
+            Aggregate &g = local_groups[key];
             if (!g.count || cents < g.amount_min) g.amount_min = cents;
             if (!g.count || cents > g.amount_max) g.amount_max = cents;
             ++g.count;
@@ -192,22 +172,60 @@ int main() {
             g.amount_sum += cents;
             g.name_bytes += name.bytes;
             g.note_bytes += note.bytes;
-            // Generated nonempty names are always quoted. Their raw slices uniquely
-            // represent the decoded name; quoted and unquoted empty names both use "".
-            auto &flags = state.names.find_or_insert(name.raw, nhash);
+
+            const uint64_t nhash = name_hash(name.raw);
+            size_t idx = nhash & GLOBAL_TABLE_MASK;
+
+            GlobalSlot *slot = nullptr;
+            while (true) {
+                GlobalSlot &s = global_table[idx];
+                uint64_t cur_h = s.hash.load(memory_order_relaxed);
+                if (cur_h == 0) {
+                    uint64_t expected = 0;
+                    if (s.hash.compare_exchange_strong(expected, nhash, memory_order_acq_rel, memory_order_relaxed)) {
+                        s.name_ptr = name.raw.data();
+                        s.name_len = name.raw.size();
+                        s.ready.store(true, memory_order_release);
+                        slot = &s;
+                        break;
+                    }
+                    cur_h = s.hash.load(memory_order_relaxed);
+                }
+                if (cur_h == nhash) {
+                    while (!s.ready.load(memory_order_acquire)) {
+                        __builtin_ia32_pause();
+                    }
+                    if (s.name_len == name.raw.size() && memcmp(s.name_ptr, name.raw.data(), s.name_len) == 0) {
+                        slot = &s;
+                        break;
+                    }
+                }
+                idx = (idx + 1) & GLOBAL_TABLE_MASK;
+            }
+
+            size_t word_idx = key >> 6;
             uint64_t bit = 1ULL << (key & 63);
-            uint64_t &word = flags[key >> 6];
-            if (!(word & bit)) { word |= bit; ++g.names_distinct; }
+            uint64_t cur_mask = slot->countries[word_idx].load(memory_order_relaxed);
+            if (!(cur_mask & bit)) {
+                uint64_t prev = slot->countries[word_idx].fetch_or(bit, memory_order_relaxed);
+                if (!(prev & bit)) {
+                    ++g.names_distinct;
+                }
+            }
         }
     };
+
     vector<thread> threads;
+    threads.reserve(worker_count);
     for (size_t i = 0; i < worker_count; ++i) threads.emplace_back(parse_range, i);
-    for (thread &thread : threads) thread.join();
-    vector<Aggregate> groups = move(states[0].groups);
+    for (thread &th : threads) th.join();
+
+    // Sum aggregates across threads
+    vector<Aggregate> groups = move(thread_groups[0]);
     for (size_t worker = 1; worker < worker_count; ++worker) {
         for (size_t key = 0; key < groups.size(); ++key) {
             Aggregate &dst = groups[key];
-            const Aggregate &src = states[worker].groups[key];
+            const Aggregate &src = thread_groups[worker][key];
             if (!src.count) continue;
             if (!dst.count || src.amount_min < dst.amount_min) dst.amount_min = src.amount_min;
             if (!dst.count || src.amount_max > dst.amount_max) dst.amount_max = src.amount_max;
@@ -216,21 +234,10 @@ int main() {
             dst.amount_sum += src.amount_sum;
             dst.name_bytes += src.name_bytes;
             dst.note_bytes += src.note_bytes;
-        }
-        for (const NameState &entry : states[worker].names.slots) {
-            if (!entry.name.data()) continue;
-            auto &flags = states[0].names.find_or_insert(entry.name, entry.hash);
-            for (size_t word = 0; word < flags.size(); ++word) {
-                uint64_t fresh = entry.countries[word] & ~flags[word];
-                flags[word] |= entry.countries[word];
-                while (fresh) {
-                    unsigned bit = __builtin_ctzll(fresh);
-                    ++groups[word * 64 + bit].names_distinct;
-                    fresh &= fresh - 1;
-                }
-            }
+            dst.names_distinct += src.names_distinct;
         }
     }
+
     FILE *out = fopen("/out/aggregates.txt", "wb");
     if (!out) return 1;
     vector<uint16_t> order(country_codes.size());
