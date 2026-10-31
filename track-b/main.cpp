@@ -183,7 +183,11 @@ int main() {
         const char *finish = p++;
         docs.emplace_back(start, finish - start);
     }
-    constexpr size_t workers = 6;
+    // The board gives 12 threads; indexing and query evaluation both scale with
+    // them, and the per-worker posting overhead barely moves peak memory.
+    size_t workers = thread::hardware_concurrency();
+    if (!workers) workers = 1;
+    if (workers > 16) workers = 16;
     vector<vector<vector<uint32_t>>> parts(workers);
     vector<thread> build_threads;
     for (size_t worker = 0; worker < workers; ++worker) {
