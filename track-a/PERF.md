@@ -21,6 +21,8 @@ Every step from the reference to your final version, each with the live-board ru
 | 14 | Unchanged-source confirmation | `9c8f98c` | run-24951b257cd0 | 0.046647 | 23.544 | 323 | 31.734877 | 75.076841 |
 | Follow-up | Rejected static/calendar trial; restoring previous build and arithmetic | `a3babda` | run-e30fa8549d30 | 0.051866 | 23.163 | 325 | 30.166297 | 73.976100 |
 
+| Rejected four-byte single-pass trial | Lower memory but slower official run | `77939f3` | run-ffd51b52e53d | 0.062165 | 21.742 | 379 | 27.269512 | 71.783869 |
+
 Local `check.py` passed the official seed-1 full output hash
 `495ca09682b9673ef836a506496177680bb4a3af54255174befddb1f83481cd3`.
 The local Docker check took 0.24 s including container startup; this is not a
@@ -171,3 +173,11 @@ alternating public-data runs gave 0.035872 s for the prior hour-local image and
 oracles passed, and three full additional seeds (19/37/59) each passed twenty
 sandbox executions against their official reference. These are correctness and
 local timing results; the official score is not inferred from them.
+
+
+Official trial `run-ffd51b52e53d` at `77939f3` passed every gate but measured
+0.062165 s, 21,741,568 bytes, S=379, K=27.269512, 71.783869 points. The local
+speed advantage did not transfer. Lower memory did not compensate for time and
+source costs. Rejected: main.cpp, Dockerfile and README.md return byte-for-byte
+to the best confirmed 9c8f98c A source. The expanded overflow/count-wrap tests
+remain as independent correctness checks.

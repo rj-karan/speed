@@ -1,41 +1,40 @@
-# Track A: single-pass compact aggregation
+# Track A: hour-local aggregation
 
 ## Approach
 
-Twelve workers parse disjoint line-aligned byte ranges once. Each worker interns
-exact endpoint bytes and stores private records by hour. A record uses 11 bits
-for an endpoint ID, one for 5xx status and 20 for latency. Values at or above the
-20-bit sentinel are retained in a full-width overflow stream in encounter order;
-this is exact compression, including UINT32_MAX, rather than truncation.
-Private endpoint counts use a low byte plus multiples of 256 in a spill table.
+The dependency-free C++ program maps the input and discovers every contiguous
+run of one hour using vectorized newline scanning. Runs are indexed by hour;
+no bound on input disorder is assumed. Twelve persistent workers then claim
+hours independently. Each hour has its own endpoint dictionary and compact
+six-byte latency/endpoint records. Exact byte comparisons resolve hash collisions.
+A counting scatter groups the latencies in a small hour-local array. Nearest-rank
+selection extracts p50/p95/p99; small groups use sorting. Endpoint keys are sorted
+bytewise, and hour buffers are written in chronological order.
 
-Two barriers publish the private dictionaries and global endpoint mappings.
-Workers then claim whole hours. Counts determine a direct scatter into contiguous
-per-endpoint latency-code ranges, after which the private hour buffers are freed.
-Nearest-rank selection operates on those ranges. If a selected rank reaches the
-sentinel, the exact rank within that endpoint's full-width tail is selected.
-Endpoints are sorted bytewise and output hours are written chronologically.
-No bound on input disorder is assumed. Each hour has a single owner; there are
-no shared request counters or scatter cursors.
-
-AVX2 finds endpoint delimiters. Bounded SWAR decimal reduction handles short
-latencies; a scalar path handles longer values and file tails. Hash collisions
-always require exact endpoint equality. Mapped record buffers grow on demand;
-output mappings are released after writing, avoiding retained output allocations.
+There are no shared per-request atomics, global latency scatter cursors, or
+cross-worker name-table merges. Temporary records are discarded after their
+hour is formatted. AVX2 finds endpoint delimiters; bounded packed-decimal parsing
+handles up to seven latency digits at once, with a scalar path for longer values
+and file tails. Full uint32 latency values and duplicate requests remain exact.
 
 ## Build and validation
 
-The allowlisted GCC image builds offline with `-march=native`; the event builds
-native-targeted tracks on its scoring CPU. No external runtime dependencies
-(D = 1). `check.py` verifies the published full output hash. Independent tests
-cover shuffled hours, every method, endpoint/vector boundaries, duplicate lines,
-empty input, uint32 extremes, sentinel-adjacent values, quantile ranks inside
-overflow tails and 800,000 repeated requests forcing buffer growth/count wraps.
-Three additional full seeds are checked against the official Python reference.
-PERF.md separates local experiments from official scoring-host results.
+The allowlisted GCC image builds offline with `-march=native`; the event explicitly
+builds native-targeted tracks on its scoring machine, so the resulting binary
+matches that CPU. No non-standard-library runtime dependencies (D = 1).
+
+Validation includes the full public hash, official seed-17 sample reference,
+and `tests/test_ingest.py`: shuffled hours, all methods, byte-order-sensitive
+endpoints, endpoint lengths around vector boundaries, every decimal digit length,
+uint32 extremes, duplicates and empty input. PERF.md distinguishes official
+board results from local experiments.
 
 ## With another 24 hours
 
-Profile parsing, scatter, selection and output on the scoring CPU. Compare the
-memory/time/source coefficient of overflow layouts and dictionary lifetimes.
-Keep only candidates that improve the measured combined coefficient.
+Profile range discovery, parsing and output separately on the scoring CPU.
+Compare direct mapped output and profile-guided compilation using generator
+output. Keep changes only when the combined time/memory/source coefficient improves.
+
+Output uses anonymous mapped buffers bounded by 224 bytes per populated group
+(the maximum specified row is smaller). Buffers are unmapped after each ordered
+write, avoiding allocator retention alongside the output file's page cache.

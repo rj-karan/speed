@@ -8,7 +8,7 @@ vary between runs; repeated confirmations are not new algorithm improvements.
 
 ## Best confirmed machine results
 
-These are historical bests before the current A trial, before judging. They
+These are historical bests before judging. They
 come from different commits; each track log identifies the measured source.
 
 | Track | Commit | Run | T (s) | M (bytes) | S | K | Points |
@@ -18,11 +18,11 @@ come from different commits; each track log identifies the measured source.
 | C | a3babda | run-ab1dcf6dda0c | 0.051316 | 12,656,640 | 377 | 27.280554 | 71.792660 |
 | D | 9c8f98c | run-3789c40c96ef | 0.620974 | 228,958,208 | 345 | 10.393619 | 50.838341 |
 
-The current A candidate replaces the hour-discovery scan and six-byte records
-with single-pass four-byte records and exact overflow streams. Local results
-and invariants are recorded in its track log; official K decides retention.
-B and C use their exact a3babda main.cpp sources after rejected trials. D keeps
-the measured BFS-order/packed-state design with allocation diagnostics.
+The four-byte A trial at 77939f3 passed all gates but regressed to 71.783869
+points (0.062165 s, 21,741,568 bytes, S=379). It is rejected. A returns to its
+exact 9c8f98c source and build; B and C use their exact a3babda main.cpp sources
+after rejected trials. D keeps the measured BFS-order/packed-state design with
+diagnostics. Local improvements are never substituted for scoring-host results.
 
 ## Validation
 
