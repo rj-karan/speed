@@ -242,3 +242,37 @@ Official cached-hit trial `run-d03e8bd3275f` at `827cf69` passed all gates:
 improved 15.0% from the confirmed compact index, but memory rose 41.2% and the
 source penalty increased. The combined coefficient was slightly lower than
 `run-f7c72f2f389f` (K=14.390926). The exact a3babda source/build is restored.
+
+
+## Worker-major mapped cache follow-up
+
+A memory phase probe showed why the earlier cached stream had a high peak:
+scattering worker zero into term-major output touched almost all 28.6 MB of
+sparse output while all 30.4 MB of caches were still live. Worker-major final
+segments confine those writes to one worker's contiguous range, after which its
+mapped cache is released. Per-worker prefix ends, including empty dense/absent
+entries, delimit each sparse term. Sampling chooses only representation, all
+terms and occurrences are exact. Bounds and stream width derive from current
+input, without cached corpus answers.
+
+The earlier anchor-only prototypes passed correctness but lost the combined
+local trade-off: exact-anchor two-pass 0.430443 s versus baseline 0.412453 s;
+sampled-anchor one-pass 0.363299 s with a 108,339,200-byte wrapped peak. A pooled
+inline-small-list experiment also failed to justify its memory/source cost.
+Whole-word equality did not establish a repeatable gain and is excluded.
+
+A clean five-run interleaved comparison gave trimmed means: baseline 0.413235 s,
+worker-major mapped cache 0.325041 s, plus dead-allocation trimming/direct dense
+first-operand copy 0.313849 s (24.0% below baseline). Separate shell-wrapped peaks
+were approximately 72.3 MB baseline, 111.8 MB term-major mapped cache, 84.7 MB
+worker-major and 87.2 MB with trim/copy. These local wrapped peaks are not official
+memory figures. The previous B source is preserved in git; official K determines
+whether this candidate is retained.
+
+
+The formatted/documented selected build produces the identical runtime image as
+the measured trim/copy prototype. It passes the public full hash and all seven
+independent oracles. Seeds 19, 37 and 59 each pass twenty full-scale sandbox
+runs against the official Python reference. The refreshed root validation record
+pins these images and source hashes. This establishes correctness/stability,
+not a machine-score improvement; the official trial follows.

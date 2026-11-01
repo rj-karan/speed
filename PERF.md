@@ -20,8 +20,9 @@ come from different commits; each track log identifies the measured source.
 
 The four-byte A trial at 77939f3 passed all gates but regressed to 71.783869
 points (0.062165 s, 21,741,568 bytes, S=379). It is rejected. A returns to its
-exact 9c8f98c source and build; B and C use their exact a3babda main.cpp sources
-after rejected trials. D keeps the measured BFS-order/packed-state design with
+9c8f98c executable statements/build (LLVM formatting and comments only);
+C uses its a3babda main.cpp source. B now trials a mapped cache with worker-major
+final sparse segments, following phase-memory measurements recorded in its log. D keeps the measured BFS-order/packed-state design with
 diagnostics. Local improvements are never substituted for scoring-host results.
 
 ## Validation

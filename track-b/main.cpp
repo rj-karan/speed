@@ -1,18 +1,23 @@
-// Track B: parse queries first, index their terms, then answer exact queries.
-// Two passes count and fill hybrid sparse/dense postings. Worker document
-// boundaries are 64-bit aligned, so bitmap writes never share a word.
-// SIMD masks classify ASCII token bytes; carried boundaries preserve tokens
-// split across blocks. Hash matches always require full byte equality.
-// Phrase candidates use a rare term and exact adjacent-token verification.
-// Boolean operators are evaluated strictly left to right (spec section 3).
+// Track B: query-directed exact indexing in one corpus tokenize/hash pass.
+// Dense postings are filled directly; sparse term IDs are cached in bit
+// streams. A sample chooses representation only: every match is still indexed
+// exactly. Worker-major final segments let scatter free one cache before
+// touching the next output segment. Per-document cumulative ends preserve each
+// cached hit's doc ID. Word-aligned ranges permit disjoint bitmap writes;
+// hashes require byte equality. Queries use left-to-right Boolean operations
+// and exact anchored phrase checks.
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <charconv>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <immintrin.h>
+#include <malloc.h>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <sys/mman.h>
@@ -232,6 +237,29 @@ static uint32_t resolve(const Pending &pending, const Terms &terms) {
   return UINT32_MAX - 1;
 }
 
+// Reserve a virtual upper bound, touch only actual words, then unmap
+// explicitly.
+struct HitStream {
+  uint64_t *data = nullptr;
+  size_t size = 0, bytes = 0;
+  void allocate(size_t capacity) {
+    bytes = capacity * sizeof(uint64_t);
+    data = static_cast<uint64_t *>(mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    if (data == MAP_FAILED) {
+      perror("allocate cached term stream");
+      std::exit(1);
+    }
+  }
+  void push_back(uint64_t value) { data[size++] = value; }
+  uint64_t operator[](size_t i) const { return data[i]; }
+  void release() {
+    if (data)
+      munmap(data, bytes);
+    data = nullptr;
+  }
+  ~HitStream() { release(); }
+};
 struct Posting {
   size_t offset = 0;
   uint32_t count = 0;
@@ -318,6 +346,7 @@ static void append_number(string &line, uint64_t value) {
 }
 
 int main() {
+  mallopt(M_MMAP_THRESHOLD, 64 * 1024);
   Mapping query_file = map_file("/data/queries.txt"),
           docs_file = map_file("/data/docs.txt");
   if (!query_file.data || !docs_file.data)
@@ -354,9 +383,8 @@ int main() {
     workers = 1;
   if (workers > 12)
     workers = 12;
-  // Full scale has 250,000 documents. At least four aligned ranges keep
-  // each local ID within 16 bits, even on machines reporting fewer cores.
-  workers = max(workers, size_t(4));
+  workers =
+      max(workers, size_t(4)); // Each local doc ID fits 16 bits at all scales.
   vector<size_t> starts(workers + 1);
   for (size_t w = 0; w < workers; ++w)
     starts[w] = (docs.size() * w / workers) & ~size_t(63);
@@ -365,16 +393,50 @@ int main() {
     if (starts[w + 1] - starts[w] > 65536)
       return 1;
   const size_t words = (docs.size() + 63) / 64, term_count = terms.names.size();
-  vector<vector<uint32_t>> counts(workers, vector<uint32_t>(term_count));
   vector<Posting> postings(term_count);
-  vector<uint16_t> sparse;
-  vector<uint64_t> dense;
-  auto scan = [&](size_t worker, bool write) {
-    // Word-aligned document ranges make bitmap writes disjoint, so the
-    // second pass needs no atomics, including for very frequent terms.
+  vector<uint32_t> sampled(term_count), last_sample(term_count, UINT32_MAX);
+  // Sampling chooses representation only. Every document occurrence is still
+  // counted/indexed exactly; a poor estimate changes memory/time, not answers.
+  size_t sample_count = min(docs.size(), size_t(512));
+  for (size_t i = 0; i < sample_count; ++i) {
+    size_t doc = i * docs.size() / sample_count;
+    const char *begin = docs[doc].data(), *end = begin + docs[doc].size();
+    scan_tokens(begin, end, [&](const char *p, size_t length) {
+      uint32_t id = resolve(prepare_token(p, length, end, terms), terms);
+      if (id < term_count && last_sample[id] != doc) {
+        ++sampled[id];
+        last_sample[id] = doc;
+      }
+    });
+  }
+  size_t dense_size = 0;
+  for (size_t id = 0; id < term_count; ++id) {
+    if (sampled[id] * 16 > sample_count) {
+      postings[id].dense = true;
+      postings[id].offset = dense_size;
+      dense_size += words;
+    }
+  }
+  vector<uint64_t> dense(dense_size);
+  // Store term IDs only; per-document cumulative ends supply their document.
+  // Width comes from this run's query dictionary, including every absent term.
+  unsigned term_bits =
+      max(1u, unsigned(bit_width(term_count ? term_count - 1 : 0)));
+  uint64_t term_mask = (uint64_t(1) << term_bits) - 1;
+  vector<vector<uint32_t>> counts(workers, vector<uint32_t>(term_count));
+  vector<HitStream> hits(workers);
+  vector<uint32_t> doc_ends(docs.size());
+  auto scan = [&](size_t worker) {
     size_t begin = starts[worker], finish = starts[worker + 1];
+    // A length-L document has at most ceil(L/2) alphanumeric runs.
+    size_t capacity = 0;
+    for (size_t doc = begin; doc < finish; ++doc)
+      capacity += (docs[doc].size() + 1) / 2;
+    hits[worker].allocate((capacity * term_bits + 63) / 64 + 1);
     vector<uint32_t> last_doc(term_count, UINT32_MAX);
-    auto &positions = counts[worker];
+    uint64_t carry = 0;
+    unsigned used = 0;
+    uint32_t hit_count = 0;
     for (size_t doc = begin; doc < finish; ++doc) {
       const char *t = docs[doc].data(), *doc_end = t + docs[doc].size();
       Pending batch[16];
@@ -385,55 +447,89 @@ int main() {
           if (id >= term_count || last_doc[id] == doc)
             continue;
           last_doc[id] = doc;
-          if (!write)
-            ++positions[id];
-          else if (postings[id].dense)
+          if (postings[id].dense)
             dense[postings[id].offset + doc / 64] |= uint64_t(1) << (doc & 63);
-          else
-            sparse[positions[id]++] = doc - begin;
+          else {
+            ++counts[worker][id];
+            // Low bits complete this word; any high bits start the
+            // next. The exact-fill case avoids a shift by 64.
+            carry |= uint64_t(id) << used;
+            unsigned room = 64 - used;
+            used += term_bits;
+            if (used >= 64) {
+              hits[worker].push_back(carry);
+              used -= 64;
+              carry = room < term_bits ? uint64_t(id) >> room : 0;
+            }
+            ++hit_count;
+          }
         }
         size = 0;
       };
-      scan_tokens(t, doc_end, [&](const char *start, size_t length) {
-        batch[size++] = prepare_token(start, length, doc_end, terms);
+      scan_tokens(t, doc_end, [&](const char *p, size_t length) {
+        batch[size++] = prepare_token(p, length, doc_end, terms);
         if (size == 16)
           flush();
       });
       flush();
+      doc_ends[doc] = hit_count;
     }
+    if (used)
+      hits[worker].push_back(carry);
+    hits[worker].push_back(0); // Safe lookahead at a partial final word.
   };
-  auto pass = [&](bool write) {
-    vector<thread> threads;
-    for (size_t w = 0; w < workers; ++w)
-      threads.emplace_back(scan, w, write);
-    for (auto &t : threads)
-      t.join();
-  };
-  pass(false);
-  size_t sparse_size = 0, dense_size = 0;
+  vector<thread> index_threads;
+  for (size_t w = 0; w < workers; ++w)
+    index_threads.emplace_back(scan, w);
+  for (thread &t : index_threads)
+    t.join();
+  vector<uint32_t>().swap(sampled);
+  vector<uint32_t>().swap(last_sample);
+  malloc_trim(0); // Return dead parser/worker allocation pages before scatter.
   for (size_t id = 0; id < term_count; ++id) {
     auto &list = postings[id];
-    for (auto &part : counts)
-      list.count += part[id];
-    list.dense = size_t(list.count) * 2 > words * 8;
-    if (list.dense) {
-      list.offset = dense_size;
-      dense_size += words;
-    } else {
-      list.offset = sparse_size;
-      for (auto &part : counts) {
-        uint32_t n = part[id];
-        part[id] = sparse_size;
+    if (list.dense)
+      for (size_t j = 0; j < words; ++j)
+        list.count += __builtin_popcountll(dense[list.offset + j]);
+    else
+      for (auto &part : counts)
+        list.count += part[id];
+  }
+  // Allocate worker-major: counts[w][id] starts as a cursor and ends as the
+  // segment end. Even dense/absent terms retain a prefix, so the preceding
+  // term's end is the current sparse term's beginning (id zero uses the base).
+  size_t sparse_size = 0;
+  vector<size_t> segment_offsets(workers);
+  for (size_t w = 0; w < workers; ++w) {
+    segment_offsets[w] = sparse_size;
+    for (size_t id = 0; id < term_count; ++id) {
+      auto n = counts[w][id];
+      counts[w][id] = sparse_size;
+      if (!postings[id].dense)
         sparse_size += n;
-      }
     }
   }
-  sparse.resize(sparse_size);
-  dense.resize(dense_size);
-  pass(true);
-  // Sparse cursors now hold per-worker segment ends; queries retain them.
-  // Each sorted segment stores doc-starts[worker] in uint16_t; adding the
-  // base reconstructs exact global IDs. No document hits are discarded.
+  // Fill every sparse cell once. Worker-major output confines page faults to
+  // this worker's segment; it never faults the entire term-major output at
+  // once.
+  auto sparse = make_unique_for_overwrite<uint16_t[]>(sparse_size);
+  auto scatter = [&](size_t worker) {
+    size_t i = 0;
+    for (size_t doc = starts[worker]; doc < starts[worker + 1]; ++doc) {
+      while (i < doc_ends[doc]) {
+        size_t bit = i++ * size_t(term_bits), word = bit >> 6;
+        unsigned shift = bit & 63;
+        uint64_t value = hits[worker][word] >> shift;
+        if (shift + term_bits > 64)
+          value |= hits[worker][word + 1] << (64 - shift);
+        uint32_t id = value & term_mask;
+        sparse[counts[worker][id]++] = uint16_t(doc - starts[worker]);
+      }
+    }
+    hits[worker].release();
+  };
+  for (size_t w = 0; w < workers; ++w)
+    scatter(w);
   auto visit = [&](uint32_t id, auto consume) {
     const auto &list = postings[id];
     if (list.dense) {
@@ -447,7 +543,7 @@ int main() {
       }
     } else
       for (size_t w = 0; w < workers; ++w) {
-        size_t first = w ? counts[w - 1][id] : list.offset;
+        size_t first = id ? counts[w][id - 1] : segment_offsets[w];
         for (size_t j = first; j < counts[w][id]; ++j)
           consume(uint32_t(starts[w] + sparse[j]));
       }
@@ -480,10 +576,11 @@ int main() {
                     (uint64_t(1) << (doc & 63))))
                 return;
             } else {
-              size_t first = segment ? counts[segment - 1][id] : list.offset;
+              size_t first =
+                  id ? counts[segment][id - 1] : segment_offsets[segment];
               if (!list.count ||
-                  !binary_search(sparse.data() + first,
-                                 sparse.data() + counts[segment][id],
+                  !binary_search(sparse.get() + first,
+                                 sparse.get() + counts[segment][id],
                                  uint16_t(doc - starts[segment])))
                 return;
             }
@@ -496,10 +593,15 @@ int main() {
           }
         });
       } else {
-        fill(result.begin(), result.end(), 0);
-        visit(q.terms[0], [&](uint32_t doc) {
-          result[doc / 64] |= uint64_t(1) << (doc & 63);
-        });
+        if (postings[q.terms[0]].dense)
+          copy_n(dense.data() + postings[q.terms[0]].offset, words,
+                 result.data());
+        else {
+          fill(result.begin(), result.end(), 0);
+          visit(q.terms[0], [&](uint32_t doc) {
+            result[doc / 64] |= uint64_t(1) << (doc & 63);
+          });
+        }
         for (size_t i = 0; i < q.ops.size(); ++i) {
           const auto &next = postings[q.terms[i + 1]];
           char op = q.ops[i];

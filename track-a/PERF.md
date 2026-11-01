@@ -181,3 +181,12 @@ speed advantage did not transfer. Lower memory did not compensate for time and
 source costs. Rejected: main.cpp, Dockerfile and README.md return byte-for-byte
 to the best confirmed 9c8f98c A source. The expanded overflow/count-wrap tests
 remain as independent correctness checks.
+
+
+Restoration confirmation `run-d0dac7052e4e` at `68f48d4` passed all gates:
+T=0.047073 s, M=23,781,376 bytes, S=323, K=31.527583, 74.934534 points.
+The follow-up applies LLVM whitespace formatting and explanatory comments only;
+executable statements/build remain the confirmed 9c8f98c version.
+
+The formatted/commented A restoration builds the identical runtime image as the
+validated restoration (sha256:d4da1a146a3c prefix); the full public hash passes.
