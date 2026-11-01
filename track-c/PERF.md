@@ -9,13 +9,14 @@ Every step from the reference to your final version, each with the live-board ru
 | 2 | Store each distinct name in a compact open-addressed table, retaining bytewise equality checks | `0ebeb13` | run-4bba7972a60f | 0.577201 | 9.908 | 243 | 9.124117 | 48.009542 |
 | 3 | Parse three record-aligned ranges in parallel and merge name membership masks | `7da67d5` | run-a04bbae35fdc | 0.319128 | 23.003 | 318 | 9.958422 | 49.909527 |
 | 4 | Store each name's hash in its dedup slot and prefetch the slot right after the name is parsed | `c50790e` | run-851a9e87bcce | 0.225056 | 26.137 | 329 | 11.500588 | 53.036003 |
-| 5 | Single lock-free global atomic 262k-slot open-addressed table with atomic bitwise fetch_or country tracking across 12 threads | `060f342` | run-be3c6c1fdad8 | 0.083043 | 22.307 | 323 | 19.596345 | 64.608753 |
+| 5 | Shared global atomic 262k-slot open-addressed table with atomic bitwise fetch_or country tracking across 12 threads | `060f342` | run-be3c6c1fdad8 | 0.083043 | 22.307 | 323 | 19.596345 | 64.608753 |
 | 6 | Global interning before compact slots | `35c44e9` | run-f255ee6ba678 | 0.770184 | 12.521 | 218 | 7.661216 | 44.214884 |
 | 7 | Inline prefixes and bounded quote search | `1a14f38` | run-2134f4a745f2 | 0.063414 | 22.934 | 342 | 22.110772 | 67.230195 |
 | 8 | Packed integer parsing | `af43e3f` | run-078fb2108046 | 0.061212 | 22.888 | 362 | 22.322696 | 67.437332 |
 | 9 | Unchanged-source confirmation | `1311354` | run-d480ecba4541 | 0.059338 | 23.093 | 362 | 22.632094 | 67.736237 |
 | 10 | SIMD quote search and smaller working set | `9c8f98c` | run-4dda2a32142b | 0.051579 | 13.193 | 377 | 26.985886 | 71.556834 |
 | Follow-up | Unchanged binary; formatting/comments confirmation | `a3babda` | run-ab1dcf6dda0c | 0.051316 | 12.657 | 377 | 27.280554 | 71.792660 |
+| Rust trial, rejected | Same algorithm ported to Rust | `7b22df9` | run-8c76f3025bd6 | 0.053445 | 13.414 | 402 | 26.169341 | 70.889639 |
 
 Local `check.py` passed the official seed-1 full output hash
 `d8088b1cd42ba1338b1345b107b55db7b96ef1f5066f3ff64fd26a8912a0f536`.
@@ -49,7 +50,7 @@ the unchanged parallel-parse code varied between 0.286 s and 0.340 s across runs
 and 0.225 s sits below that whole range, so the gain is real rather than noise.
 
 In step 5, we eliminated both per-worker table duplication and the sequential
-post-parse merge. A single lock-free 262,144-slot open-addressed table with 64-byte
+post-parse merge. A single shared 262,144-slot open-addressed table with 64-byte
 cache-aligned entries is shared across all 12 hardware threads. Each slot holds
 the name's atomic 64-bit hash, pointer into the mapped CSV, length, and four
 atomic 64-bit country bitmasks. Upon seeing a name, threads perform a relaxed check
@@ -181,3 +182,51 @@ offline Rust build passes the public full expected hash, generated full seed 42,
 sample seed 7, tiny seed 17 and the independent CSV oracle. Local timing ties do
 not decide this trial; its official T/M/S/K will decide retention. The last C++
 source and its 71.792660-point confirmation are preserved at a3babda.
+
+
+Official Rust comparison: `run-8c76f3025bd6` at `7b22df9` passed all gates:
+0.053445 s, 13,414,400 bytes, S=402, K=26.169341 and 70.889639 points.
+The prior C++ version at a3babda measured 0.051316 s, 12,656,640 bytes, S=377,
+K=27.280554 and 71.792660 points. The direct Rust port lost on the combined
+coefficient and is reverted to the exact C++ files from a3babda. The tested
+Rust source remains buildable in experiments/track-c-rust for further work.
+
+
+## Reuse exact boundary words loaded during hashing
+
+The new C++ candidate retains the first/last words already loaded for hashing
+and publishes them as the slot's immutable key. For names up to sixteen bytes,
+these words cover the complete value; longer names additionally compare every
+interior byte. Shorter-than-eight-byte paths retain their exact original loads.
+Hash collisions therefore still cannot change distinct counts. This removes
+reloading/comparing the same short name bytes through a variable-length memcmp.
+
+Five clean interleaved full-data local process runs measured current C++
+0.035025 s, C++ boundary-word reuse 0.032149 s, and the equivalent Rust candidate
+0.033599 s. Every hash matched. The selected C++ candidate passed the public
+full check; independent edge cases and three extra full seeds are being verified.
+The official coefficient, rather than these local times, decides retention.
+
+
+## Compact atomic probe metadata
+
+Research: https://abseil.io/about/design/swisstables describes compact fingerprints
+separate from payload entries. Our independent implementation adds one atomic
+control byte per slot; no external hash-table library or code is imported.
+Control states are 0 free, 1 initializing and 2..255 published hash tags. The
+successful claimant writes all immutable slot fields before release-publishing
+the tag. Readers acquire it, reject mismatched fingerprints without reading the
+64-byte slot, and retain full hash/length/boundary/interior equality. Country
+membership stays atomic. This uses spinning during publication; formal lock-free
+progress is not claimed.
+
+Five interleaved local full-data process runs: original C++ 0.032308 s,
+boundary-word reuse 0.029580 s, byte control with payload prefetch 0.029881 s,
+control-only prefetch 0.027236 s, equivalent Rust control 0.029726 s. All hashes
+matched. The selected C++ candidate uses control-only prefetch. Its official
+coefficient remains to be measured.
+
+A note-specific digit/quote-counting parser was also correct on full data but
+slower than boundary-word reuse: 0.031424 versus 0.026211 s in that batch;
+Rust measured 0.032433 s. It was rejected. No generator-specific note fast path
+is included in the submission.

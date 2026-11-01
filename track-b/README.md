@@ -4,16 +4,14 @@ Read queries first, intern their terms and tokenize ASCII alphanumeric runs with
 bounded SIMD loads. A packed hash checks original bytes on collisions. No Unicode
 normalization or stopword removal is performed.
 
-The first corpus pass counts unique document occurrences per queried term. Allocate
-one exact contiguous posting array for rare terms and bitmaps for frequent terms,
-choosing whichever representation uses fewer bytes. Sparse IDs use two bytes
-relative to each worker's base. Segment ends reconstruct exact global IDs and
-limit phrase membership searches to the correct worker segment. At least four
-aligned ranges cover the specified maximum of 250,000 documents within 16 bits;
-a runtime guard checks the span. The second pass fills these
-arrays directly. Document ranges align to bitmap words, so workers write disjoint
-locations without atomics. This eliminates duplicated posting vectors and their
-serial concatenation. All allocations derive from current input, not cached data.
+A small sample chooses bitmap representation for frequent terms; sampling never
+filters answers. One complete corpus pass fills those bitmaps and caches every
+unique sparse (term, document) occurrence. Cached IDs use the dictionary's actual
+bit width, with per-document cumulative ends supplying document IDs. Exact counts
+then allocate two-byte worker-relative postings, filled from the cached streams.
+Each consumed stream is released while scattering. This removes the second full
+text tokenize/hash pass. Aligned worker ranges keep bitmap writes disjoint, and
+at least four ranges bound local document IDs to sixteen bits at full scale.
 
 Boolean operators apply strictly left to right to per-worker bitmap scratch:
 dense terms use word operations; sparse terms touch their listed documents.

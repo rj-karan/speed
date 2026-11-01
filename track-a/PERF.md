@@ -135,3 +135,9 @@ The public full hash and independent hour/quantile oracle pass.
 
 Official follow-up at `a3babda`: all gates passed. Rejected static/calendar trial; restoring previous build and arithmetic.
 The local static-link result did not transfer to the scoring host: 73.976100 points versus the prior 75.076841. The static build is reverted, and the original direct hour-offset calculation is expressed with named constants. No score gain is attributed to readability changes.
+
+
+A further allocator-threshold experiment passed the full hash but was not promoted:
+0.034860 -> 0.037126 s locally, with a shell-wrapped peak of
+24,440,832 -> 19,841,024 bytes. The modest estimated coefficient change and
+extra allocation cost do not establish the larger A improvement still needed.

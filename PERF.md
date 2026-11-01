@@ -33,14 +33,21 @@ seed 42, sample seed 7 and tiny seed 17 against the official Python reference.
 The Rust C evaluation passes these same hashes and the CSV oracle; it is retained
 outside the submitted track folders because it did not establish a local gain.
 
-`tools/validate_seeds.py` is running three additional full-scale seeds (19, 37,
-59), twenty sandbox executions per track/dataset. It pins each Docker image by
-immutable ID, checks the exact output file set, deletes the old result before
-each run and compares every output SHA-256 to the official Python reference.
-Machine-readable manifests in ignored data/holdouts record input hashes,
-generator/reference source hashes, image IDs and completed repetitions. A
-completion statement will be added when all 240 runs pass. Repetition is
-stability evidence, not a proof that data races are impossible.
+`tools/validate_seeds.py` completed three additional full-scale seeds (19, 37,
+59), twenty sandbox executions per track/dataset: **12 datasets and 240 matching
+runs for the selected source images**. B/C and restored A were rechecked after
+changes. Reports pin each image by immutable ID, verify the exact output file
+set, delete prior results and compare every output SHA-256 with the official
+Python reference. [Validation record](validation/full-seeds.json) includes input,
+generator/reference and submitted-source hashes. Repetition is stability evidence,
+not a formal race-freedom proof. The independent oracles also pass.
+
+The latest trial replaces B's second tokenize/hash pass with cached, bit-packed
+sparse term IDs, and adds exact boundary-word reuse plus compact atomic probe
+metadata to C. The direct Rust port was officially measured at 70.889639 points
+and rejected against C++'s 71.792660; its source remains in experiments/. The
+new C candidate returns to C++ after that measured comparison. Official scores
+for these new B/C algorithms will determine which source remains submitted.
 
 ## Reading the results
 

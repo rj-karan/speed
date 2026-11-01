@@ -1,7 +1,8 @@
 # BeyondBug — Speed Demon 2026
 
 Our entry for all four tracks of [Speed Demon](https://speeddemon.dev).
-C++ and Rust implementations for log ingestion, search, CSV aggregation and graph traversal.
+C++ implementations for log ingestion, search, CSV aggregation and graph traversal;
+a tested Rust comparison is retained under experiments/.
 All four solutions have zero non-standard-library runtime dependencies.
 
 ## Build and verify
@@ -65,9 +66,9 @@ and submission requirements. The frozen specs and harness take precedence.
 
 ## Dependencies
 
-Submitted programs use the C++/Rust standard libraries and Linux system calls;
+Submitted programs use the C++ standard library and Linux system calls;
 all four manifests declare zero runtime package dependencies. The builds use
-pinned GCC/Rust images and the runtimes use pinned Debian. The standalone Rust
+pinned GCC images and the runtimes use pinned Debian. The standalone Rust
 comparison in [experiments/track-c-rust](experiments/track-c-rust) uses Rust's
 standard library without crates and is outside the submitted track folders.
 

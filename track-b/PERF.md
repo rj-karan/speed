@@ -202,3 +202,35 @@ are being checked before finalizing the release.
 
 Official follow-up at `a3babda`: all gates passed. Confirmed compact worker-relative postings.
 `run-f7c72f2f389f` measured 0.627526 s, 71,049,216 bytes, S=546 and K=14.390926: **57.904436 points**. Compared with unchanged-source `9c8f98c`, memory fell 25.8%, time fell 2.9%, and the combined coefficient improved.
+
+
+## Flat cached-hit experiments
+
+Several exact single-pass variants avoid re-tokenizing the corpus. Per-worker
+32-bit (term, local-doc) hit buffers passed the full hash and oracle, but peaked
+at 141,856,768 bytes; sequential scatter into an uninitialized final array and
+explicit large-block release reduced that to 117,858,304. In one interleaved
+batch, baseline 0.425481 s became 0.360280 s (plain flat hits) or 0.368357 s
+(lower peak). Time improved, but the memory/source trade-off remained uncertain.
+
+Replacing each hit's document ID with a per-document cumulative count allowed
+three-byte term IDs (106,221,568 bytes) or variable-width packed term IDs
+(99,561,472 bytes). The bit-packed version derives width from current queries,
+handles words spanning 64-bit boundaries, and retains exact two-byte final
+postings. It passes the full hash and independent query oracle. A later
+interleaved batch measured baseline 0.414150 s versus 0.349781 s. One upfront
+virtual reservation did not establish another gain (0.347036 s, 109,584,384-byte
+peak); three-byte reserved buffers measured 0.347661 s and 119,611,392 bytes.
+No official point gain is claimed for these prototypes. They remain outside the
+submission until the combined coefficient justifies a change.
+
+
+A separate compact-fingerprint/SIMD dictionary experiment passed the full hash,
+but added lookup overhead on the local workload. After reboot, interleaved means
+were 0.443517 s for the confirmed compact baseline, 0.482812 s for scalar byte
+metadata, 0.532306 s for 16-byte metadata groups, and 0.511552 s for a smaller
+SIMD table. These dictionary variants were rejected. Hardware CRC hash variants
+also failed to improve the baseline reproducibly (0.422259 -> 0.428605/0.427120 s).
+The selected official trial retains the original exact dictionary/hash and uses
+one corpus pass plus variable-width cached sparse term IDs. It trades temporary
+memory/source for time; only an official K improvement justifies retaining it.
