@@ -38,11 +38,3 @@ Record integers use a bounded eight-byte decimal fast path, with scalar handling
 for longer values and short file tails. The independent CSV oracle in
 `tests/test_join.py` checks quoting, collision equality, integer lengths, byte
 counts, distinct names and signed money against direct Python aggregation.
-
-
-A separate atomic control byte per hash slot stores free/publishing/published
-state and a hash fingerprint. A probe whose fingerprint differs avoids loading
-the 64-byte key/membership entry. The successful claimant writes every immutable
-key field, then publishes the control byte with release ordering. Readers acquire
-that byte before reading the key. Full hash, length and exact boundary/interior
-comparisons still resolve every collision; country membership remains atomic.

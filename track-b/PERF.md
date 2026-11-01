@@ -19,6 +19,7 @@ Every step from the reference to your final version, each with the live-board ru
 | 12 | Unchanged-source confirmation | `1311354` | run-92631bd3cc69 | 0.635049 | 95.687 | 530 | 13.538797 | 56.579004 |
 | 13 | Unchanged-source confirmation | `9c8f98c` | run-a8a26830f3fb | 0.646041 | 95.814 | 530 | 13.419566 | 56.386923 |
 | Follow-up | Confirmed compact worker-relative postings | `a3babda` | run-f7c72f2f389f | 0.627526 | 71.049 | 546 | 14.390926 | 57.904436 |
+| Rejected cached-hit trial | Time improved, combined K did not | `827cf69` | run-d03e8bd3275f | 0.533664 | 100.352 | 600 | 14.359308 | 57.856675 |
 
 Local `check.py` passed the official seed-1 full output hash
 `f86973c210228141bcb6f1f1b10188ad2a9b65f71e7cd7cf4590b38de4e80927`.
@@ -234,3 +235,10 @@ also failed to improve the baseline reproducibly (0.422259 -> 0.428605/0.427120 
 The selected official trial retains the original exact dictionary/hash and uses
 one corpus pass plus variable-width cached sparse term IDs. It trades temporary
 memory/source for time; only an official K improvement justifies retaining it.
+
+
+Official cached-hit trial `run-d03e8bd3275f` at `827cf69` passed all gates:
+0.533664 s, 100,352,000 bytes, S=600, K=14.359308, 57.856675 points. Runtime
+improved 15.0% from the confirmed compact index, but memory rose 41.2% and the
+source penalty increased. The combined coefficient was slightly lower than
+`run-f7c72f2f389f` (K=14.390926). The exact a3babda source/build is restored.

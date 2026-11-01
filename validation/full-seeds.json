@@ -1,5 +1,5 @@
 {
-  "verified_at_utc": "2026-11-01T02:17:14.610890+00:00",
+  "verified_at_utc": "2026-11-01T02:52:01.951358+00:00",
   "official_commit": "7a9057bce3004c4120b01a480f51d8c0feaf74d7",
   "kind": "correctness/stability, not scoring performance",
   "sources_sha256": {
@@ -9,12 +9,12 @@
       "track-a/.speed-demon.toml": "89df4a0a0902c3809027f776a8c4538252817dc2202ee55f22090805816b1010"
     },
     "b": {
-      "track-b/main.cpp": "83f6736ca3dbfc1e1a60537a4f0c2ef187af7f07f66197eafbdf0f7f4d7ffb24",
+      "track-b/main.cpp": "cb4e4c47b52cdf0b888c4ccce0f88845f4cdeac695cadafb6a3e32c500f01a8e",
       "track-b/Dockerfile": "ff05e48118900b5f80b574a9a76fda0f77671678d95340adb5c885d01e993db6",
       "track-b/.speed-demon.toml": "1378c102ac7e0290d5818e8daebab6e357fa17e7cfb0ce0e7b9b5854161ab208"
     },
     "c": {
-      "track-c/main.cpp": "85cef0775931b907fa1653ed6dcc8c0387b151ef39ff756a31f38c0b2a588254",
+      "track-c/main.cpp": "36132b33bc59e1527a81d3a8d3fe46248854a7cc958d5bfae7c91c046debb2ca",
       "track-c/Dockerfile": "80e45cd6d3ecb407bc87c89eb3a870aef3c099a24f0722edb5f24bfa8e4973d2",
       "track-c/.speed-demon.toml": "16b5b6ffad8dd51408dda73bc2772f11bb46c898ce6dfdd15d33e1b42b1da7ba"
     },
@@ -139,7 +139,7 @@
       "expected_sha256": "436eecf05fb22b62f4c6f01eac5a0724eb53abd55addf7c78c0c25d3cadbdce3",
       "passed_repetitions": 20,
       "cpus": "0-11",
-      "image": "sha256:27ef7704f199192eaecb643be0c80020ee04f9856ed54016e18f1502adf63aa3"
+      "image": "sha256:ac6467f269249c5b4df59ce3c6b100b3bbc8ee78826da5fd98c8e986a1454d7a"
     },
     {
       "seed": 19,
@@ -156,7 +156,7 @@
       "expected_sha256": "eea083bfe4d12713ff41864ecd4d4c58648b717330956b00c41d721e00c81add",
       "passed_repetitions": 20,
       "cpus": "0-11",
-      "image": "sha256:a9fa5001773ccce3677234fdb17aaa554eb685a53a7a8c2048e80c20cabd2f2d"
+      "image": "sha256:ba68ff72e84751a707098f412705772cc0fe6f1f38701c0947bc9b4b2f41ae80"
     },
     {
       "seed": 37,
@@ -173,7 +173,7 @@
       "expected_sha256": "31d445f7738420de5d0a8ddf9baf524153734f5f6980534c367a18442f22b37c",
       "passed_repetitions": 20,
       "cpus": "0-11",
-      "image": "sha256:27ef7704f199192eaecb643be0c80020ee04f9856ed54016e18f1502adf63aa3"
+      "image": "sha256:ac6467f269249c5b4df59ce3c6b100b3bbc8ee78826da5fd98c8e986a1454d7a"
     },
     {
       "seed": 37,
@@ -190,7 +190,7 @@
       "expected_sha256": "b2da0f79c3f05059c8c11a3fee23c1b574a801eabab6b4205643cd6f5ef0a80f",
       "passed_repetitions": 20,
       "cpus": "0-11",
-      "image": "sha256:a9fa5001773ccce3677234fdb17aaa554eb685a53a7a8c2048e80c20cabd2f2d"
+      "image": "sha256:ba68ff72e84751a707098f412705772cc0fe6f1f38701c0947bc9b4b2f41ae80"
     },
     {
       "seed": 59,
@@ -207,7 +207,7 @@
       "expected_sha256": "e8b650dcb680dc2eb7364d20ebb55096f0502c433544e030b70cf6cefe36af1e",
       "passed_repetitions": 20,
       "cpus": "0-11",
-      "image": "sha256:27ef7704f199192eaecb643be0c80020ee04f9856ed54016e18f1502adf63aa3"
+      "image": "sha256:ac6467f269249c5b4df59ce3c6b100b3bbc8ee78826da5fd98c8e986a1454d7a"
     },
     {
       "seed": 59,
@@ -224,7 +224,7 @@
       "expected_sha256": "e25ebfd13c2d0546e3cffc161a984559608b4da070b8356a766f3c23ee379c99",
       "passed_repetitions": 20,
       "cpus": "0-11",
-      "image": "sha256:a9fa5001773ccce3677234fdb17aaa554eb685a53a7a8c2048e80c20cabd2f2d"
+      "image": "sha256:ba68ff72e84751a707098f412705772cc0fe6f1f38701c0947bc9b4b2f41ae80"
     }
   ]
 }

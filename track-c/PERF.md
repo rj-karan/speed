@@ -17,6 +17,7 @@ Every step from the reference to your final version, each with the live-board ru
 | 10 | SIMD quote search and smaller working set | `9c8f98c` | run-4dda2a32142b | 0.051579 | 13.193 | 377 | 26.985886 | 71.556834 |
 | Follow-up | Unchanged binary; formatting/comments confirmation | `a3babda` | run-ab1dcf6dda0c | 0.051316 | 12.657 | 377 | 27.280554 | 71.792660 |
 | Rust trial, rejected | Same algorithm ported to Rust | `7b22df9` | run-8c76f3025bd6 | 0.053445 | 13.414 | 402 | 26.169341 | 70.889639 |
+| Rejected control-array trial | Higher official peak memory | `827cf69` | run-d0a43f0b43d1 | 0.051362 | 27.976 | 385 | 23.195208 | 68.269914 |
 
 Local `check.py` passed the official seed-1 full output hash
 `d8088b1cd42ba1338b1345b107b55db7b96ef1f5066f3ff64fd26a8912a0f536`.
@@ -230,3 +231,12 @@ A note-specific digit/quote-counting parser was also correct on full data but
 slower than boundary-word reuse: 0.031424 versus 0.026211 s in that batch;
 Rust measured 0.032433 s. It was rejected. No generator-specific note fast path
 is included in the submission.
+
+
+Official metadata trial `run-d0a43f0b43d1` at `827cf69` passed all gates, but
+measured 0.051362 s, 27,975,680 bytes, S=385, K=23.195208 and 68.269914 points.
+The local time advantage did not appear on the scoring host, and its measured
+peak exceeded the previous version. The cause of that peak difference has not
+been established from the public metrics. The metadata change is rejected.
+The follow-up isolates exact boundary-word reuse with the original atomic-hash
+publication/table layout; all three full additional seeds match their references.

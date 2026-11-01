@@ -116,8 +116,8 @@ struct Aggregate {
   int32_t amount_min = 0, amount_max = 0;
 };
 
-// The loaded first/last words cover every byte for short names. Long names
-// also compare the entire interior, so even equal hashes cannot merge keys.
+// Exact boundary words are reused from hashing. For long names, compare every
+// interior byte too; hash or boundary collisions cannot merge distinct names.
 struct NameKey {
   uint64_t hash, first, last;
 };
@@ -143,22 +143,18 @@ static inline NameKey name_key(string_view name) {
   return {h < 2 ? h + 2 : h, first, last};
 }
 
-constexpr size_t GLOBAL_TABLE_CAP = 1 << 17; // 262,144 slots
+constexpr size_t GLOBAL_TABLE_CAP =
+    1 << 17; // 131,072 slots for the specified name pool.
 constexpr size_t GLOBAL_TABLE_MASK = GLOBAL_TABLE_CAP - 1;
 
 struct alignas(64) GlobalSlot {
-  uint64_t hash{0}; // Immutable after the control byte publishes this slot.
+  atomic<uint64_t> hash{0}; // 0: free, 1: publishing, >=2: published hash.
   uint32_t name_offset{0}, name_len{0};
-  uint64_t first{0}, last{0}; // Published with the immutable offset/length.
+  uint64_t first{0}, last{0}; // Exact boundary words reused from hashing.
   atomic<uint64_t> countries[4]{};
 };
 
 static GlobalSlot global_table[GLOBAL_TABLE_CAP];
-// 0 is free, 1 is being initialized, and 2..255 are published fingerprints.
-// Acquire loads of a published control byte make every immutable slot field
-// visible. Only its successful 0->1 claimant writes those fields. Membership
-// remains atomic after publication. Nonmatching probes touch only this array.
-static atomic<uint8_t> control[GLOBAL_TABLE_CAP];
 
 static void unsigned_number(FILE *out, uint64_t value) {
   char buf[24];
@@ -255,7 +251,7 @@ int main() {
       Field name = read_text(cursor, end);
       ++cursor;
       const auto [nhash, first, last] = name_key(name.raw);
-      __builtin_prefetch(&control[nhash & GLOBAL_TABLE_MASK], 0, 3);
+      __builtin_prefetch(&global_table[nhash & GLOBAL_TABLE_MASK], 1, 3);
       Field note = read_text(cursor, end);
       ++cursor;
       uint32_t region = read_record_uint(cursor, end);
@@ -290,40 +286,35 @@ int main() {
 
       size_t idx = nhash & GLOBAL_TABLE_MASK;
 
-      uint8_t tag = nhash >> 56;
-      if (tag < 2)
-        tag += 2;
       GlobalSlot *slot = nullptr;
       while (true) {
-        uint8_t state = control[idx].load(memory_order_acquire);
-        while (state == 1) {
+        GlobalSlot &s = global_table[idx];
+        uint64_t cur_h = s.hash.load(memory_order_acquire);
+        while (cur_h == 1) {
           __builtin_ia32_pause();
-          state = control[idx].load(memory_order_acquire);
+          cur_h = s.hash.load(memory_order_acquire);
         }
-        if (state == 0) {
-          uint8_t expected = 0;
-          if (control[idx].compare_exchange_strong(
-                  expected, 1, memory_order_acq_rel, memory_order_relaxed)) {
-            GlobalSlot &s = global_table[idx];
-            s.hash = nhash;
+        if (cur_h == 0) {
+          uint64_t expected = 0;
+          if (s.hash.compare_exchange_strong(expected, 1, memory_order_acq_rel,
+                                             memory_order_relaxed)) {
             s.name_offset = name.raw.data() - records.data;
-            s.name_len = name.raw.size();
             s.first = first;
             s.last = last;
-            control[idx].store(tag, memory_order_release);
+            s.name_len = name.raw.size();
+            s.hash.store(nhash, memory_order_release);
             slot = &s;
             break;
           }
-          state = control[idx].load(memory_order_acquire);
-          while (state == 1) {
+          cur_h = s.hash.load(memory_order_acquire);
+          while (cur_h == 1) {
             __builtin_ia32_pause();
-            state = control[idx].load(memory_order_acquire);
+            cur_h = s.hash.load(memory_order_acquire);
           }
         }
-        if (state == tag) {
-          GlobalSlot &s = global_table[idx];
-          if (s.hash == nhash && s.name_len == name.raw.size() &&
-              s.first == first && s.last == last &&
+        if (cur_h == nhash) {
+          if (s.name_len == name.raw.size() && s.first == first &&
+              s.last == last &&
               (s.name_len <= 16 ||
                memcmp(records.data + s.name_offset + 8, name.raw.data() + 8,
                       s.name_len - 16) == 0)) {

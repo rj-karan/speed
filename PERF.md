@@ -42,12 +42,14 @@ Python reference. [Validation record](validation/full-seeds.json) includes input
 generator/reference and submitted-source hashes. Repetition is stability evidence,
 not a formal race-freedom proof. The independent oracles also pass.
 
-The latest trial replaces B's second tokenize/hash pass with cached, bit-packed
-sparse term IDs, and adds exact boundary-word reuse plus compact atomic probe
-metadata to C. The direct Rust port was officially measured at 70.889639 points
-and rejected against C++'s 71.792660; its source remains in experiments/. The
-new C candidate returns to C++ after that measured comparison. Official scores
-for these new B/C algorithms will determine which source remains submitted.
+The cached-hit B/control-metadata C trial at 827cf69 passed correctness but
+lost combined K: B 57.856675 and C 68.269914 points. B returns to the confirmed
+compact two-pass source. C's follow-up isolates exact boundary-word reuse with
+its previous table/publication layout. These selected B/C images were rechecked
+twenty times on each additional full seed; the validation record is refreshed.
+The direct Rust port's 70.889639-point trial is also recorded and rejected against
+the prior C++ result. The public board's historical best does not replace testing
+the source that will actually be submitted at freeze.
 
 ## Reading the results
 
