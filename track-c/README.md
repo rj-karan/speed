@@ -9,12 +9,11 @@ an indexed array and parses records in one pass. The parser skips BOMs only at
 record boundaries; it treats quoted newlines as data and counts escaped quotes
 as one byte. Amounts remain exact integer cents. Aggregates and distinct-name
 counts are stored per country. Names are interned once, with a 241-bit country
-membership mask per distinct name. Each table slot caches the exact first/last words loaded during hashing and a CSV offset. Name keys refer to raw input slices: generated
+membership mask per distinct name. Each table slot caches a 16-byte name prefix and a CSV offset. Name keys refer to raw input slices: generated
 nonempty names are always quoted, so this is a one-to-one representation of the
 unescaped value; quoted and unquoted empty names both have an empty slice.
 An open-addressed table keeps those states contiguous in 131,072 fixed slots
-for the specified 100,000-name pool. Names of at most sixteen bytes compare
-those exact boundary words; longer names also compare every interior byte. Exact byte comparisons resolve collisions.
+for the specified 100,000-name pool. Exact byte comparisons resolve collisions.
 Up to twelve workers parse record-aligned ranges. A partition boundary follows an LF
 only when the next byte begins an id or boundary BOM; generated note lines start
 with lowercase letters. Workers share the name table; an atomic country-bit claim counts a

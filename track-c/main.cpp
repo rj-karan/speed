@@ -116,12 +116,7 @@ struct Aggregate {
   int32_t amount_min = 0, amount_max = 0;
 };
 
-// Exact boundary words are reused from hashing. For long names, compare every
-// interior byte too; hash or boundary collisions cannot merge distinct names.
-struct NameKey {
-  uint64_t hash, first, last;
-};
-static inline NameKey name_key(string_view name) {
+static inline uint64_t name_hash(string_view name) {
   uint64_t first = 0, last = 0;
   size_t n = name.size();
   if (n >= 8) {
@@ -140,17 +135,18 @@ static inline NameKey name_key(string_view name) {
   uint64_t h = first * 0x9e3779b185ebca87ULL ^ last * 0xc2b2ae3d27d4eb4fULL ^
                name.size();
   h = (h ^ (h >> 29)) * 0x165667b19e3779f9ULL;
-  return {h < 2 ? h + 2 : h, first, last};
+  // Preserve all home-bucket bits while reserving 0 and 1 for publication.
+  return h < 2 ? h + 2 : h;
 }
 
 constexpr size_t GLOBAL_TABLE_CAP =
-    1 << 17; // 131,072 slots for the specified name pool.
+    1 << 17; // 131,072 slots for the specified 100,000-name pool.
 constexpr size_t GLOBAL_TABLE_MASK = GLOBAL_TABLE_CAP - 1;
 
 struct alignas(64) GlobalSlot {
   atomic<uint64_t> hash{0}; // 0: free, 1: publishing, >=2: published hash.
   uint32_t name_offset{0}, name_len{0};
-  uint64_t first{0}, last{0}; // Exact boundary words reused from hashing.
+  char prefix[16]{}; // Compare short names without revisiting the CSV mapping.
   atomic<uint64_t> countries[4]{};
 };
 
@@ -184,6 +180,7 @@ int main() {
     return 1;
 
   constexpr uint16_t no_country = 65535;
+  // At most 240 country indexes; 255 marks a missing region.
   vector<uint8_t> regions(1000000, 255);
   vector<uint16_t> code_to_index(26 * 26 * 26, no_country), country_codes;
   const char *p = lookup.data, *end = p + lookup.size;
@@ -250,7 +247,7 @@ int main() {
       ++cursor;
       Field name = read_text(cursor, end);
       ++cursor;
-      const auto [nhash, first, last] = name_key(name.raw);
+      const uint64_t nhash = name_hash(name.raw);
       __builtin_prefetch(&global_table[nhash & GLOBAL_TABLE_MASK], 1, 3);
       Field note = read_text(cursor, end);
       ++cursor;
@@ -299,8 +296,7 @@ int main() {
           if (s.hash.compare_exchange_strong(expected, 1, memory_order_acq_rel,
                                              memory_order_relaxed)) {
             s.name_offset = name.raw.data() - records.data;
-            s.first = first;
-            s.last = last;
+            memcpy(s.prefix, name.raw.data(), min(name.raw.size(), size_t(16)));
             s.name_len = name.raw.size();
             s.hash.store(nhash, memory_order_release);
             slot = &s;
@@ -313,10 +309,11 @@ int main() {
           }
         }
         if (cur_h == nhash) {
-          if (s.name_len == name.raw.size() && s.first == first &&
-              s.last == last &&
+          if (s.name_len == name.raw.size() &&
+              memcmp(s.prefix, name.raw.data(),
+                     min(size_t(s.name_len), size_t(16))) == 0 &&
               (s.name_len <= 16 ||
-               memcmp(records.data + s.name_offset + 8, name.raw.data() + 8,
+               memcmp(records.data + s.name_offset + 16, name.raw.data() + 16,
                       s.name_len - 16) == 0)) {
             slot = &s;
             break;

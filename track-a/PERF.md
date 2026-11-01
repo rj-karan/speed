@@ -141,3 +141,33 @@ A further allocator-threshold experiment passed the full hash but was not promot
 0.034860 -> 0.037126 s locally, with a shell-wrapped peak of
 24,440,832 -> 19,841,024 bytes. The modest estimated coefficient change and
 extra allocation cost do not establish the larger A improvement still needed.
+
+
+## Four-byte records and exact overflow streams
+
+The earlier six-byte single-pass trial lost combined K. This follow-up instead
+uses four-byte records: 11 endpoint bits, one error bit, and a 20-bit latency
+code. The maximum code is a sentinel; a parallel encounter-ordered uint32 stream
+retains every corresponding full latency. Quantile ranks entering that tail are
+selected within its exact full-width values. Private count arrays now use bytes
+with exact multiples-of-256 spill entries, reducing their fixed footprint by 75%.
+Counts permit direct scatter, without another input scan or an in-place cycle pass.
+
+Five alternating full-input process runs (six Ryzen cores plus SMT, trimmed mean)
+measured the previous hour-local version at 0.032730 s and compact direct scatter
+at 0.027730 s (15.3% less time). Separate shell-wrapped memory peaks measured
+24,391,680 and 22,831,104 bytes; these include wrapper overhead and are not board
+memory claims. Every output hash matched. A later mixed batch was noisier, so
+these local results require official confirmation before claiming a score gain.
+Private-key early release and copied endpoint pools did not establish a clear
+further gain and are excluded. LLVM formatting, named calendar constants and
+allocation diagnostics are retained. Independent tests now force count wraps
+and percentile ranks within overflow tails, including the sentinel itself.
+
+
+The formatted, documented selected build was remeasured cleanly: five
+alternating public-data runs gave 0.035872 s for the prior hour-local image and
+0.028578 s for this build (20.3% less process time). All seven independent
+oracles passed, and three full additional seeds (19/37/59) each passed twenty
+sandbox executions against their official reference. These are correctness and
+local timing results; the official score is not inferred from them.

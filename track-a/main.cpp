@@ -1,9 +1,11 @@
-// Track A: index contiguous hour runs, then give each worker whole hours.
-// Each worker interns exact endpoint bytes, scatters compact latency records,
-// selects exact nearest-rank quantiles and formats sorted output. No request
-// counters are shared. A barrier publishes all ranges before hour processing.
-// Bounded vector loads fall back at file tails; full equality resolves hashes.
-// Input calendar window: official specs/a-ingest.md section 2.1.
+// Track A: parse each byte range once into private four-byte hour records.
+// Two barriers publish private dictionaries and then the global endpoint IDs.
+// Each subsequent hour has one owner: count, scatter, select and format without
+// per-request atomics. All hashes use exact byte equality; hour order is
+// arbitrary. Low 20-bit latency codes preserve ordering. A sentinel refers to
+// an ordinal full-uint32 overflow stream; quantiles in that tail are selected
+// exactly. Calendar and endpoint bounds: official specs/a-ingest.md sections 2
+// and 3.
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -23,13 +25,15 @@
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 using namespace std;
-constexpr size_t HOURS = 72, KEYS = 2048, GROUPS = HOURS * KEYS;
+constexpr size_t HOURS = 72, KEYS = 2048;
 // Section 2.1 fixes this calendar window for every seed and scale.
 constexpr unsigned SPAN_YEAR = 2026, SPAN_START_HOUR = 18;
 constexpr array<unsigned, 4> SPAN_MONTHS = {10, 10, 11, 11};
 constexpr array<unsigned, 4> SPAN_DAYS = {30, 31, 1, 2};
+
 struct Entry {
   uint64_t hash = 0;
   uint32_t offset = 0;
@@ -53,13 +57,54 @@ struct Dictionary {
     return e.id;
   }
 };
-struct __attribute__((packed)) Record {
-  uint32_t value;
-  uint16_t id;
+// Bits 31..21: endpoint ID; bit 20: 5xx; bits 19..0: latency code.
+using Record = uint32_t;
+constexpr unsigned VALUE_BITS = 20, ID_SHIFT = VALUE_BITS + 1;
+constexpr uint32_t VALUE_MASK = (uint32_t(1) << VALUE_BITS) - 1;
+static_assert(KEYS == (uint32_t(1) << (32 - ID_SHIFT)));
+struct Rows {
+  Record *data;
+  size_t size = 0, capacity = 65536;
+  Rows() {
+    data = static_cast<Record *>(mmap(nullptr, capacity * sizeof(Record),
+                                      PROT_READ | PROT_WRITE,
+                                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    if (data == MAP_FAILED) {
+      perror("allocate request records");
+      std::exit(1);
+    }
+  }
+  Rows(const Rows &) = delete;
+  Rows &operator=(const Rows &) = delete;
+  ~Rows() { munmap(data, capacity * sizeof(Record)); }
+  void push_back(Record value) {
+    if (size == capacity) {
+      void *next = mremap(data, capacity * sizeof(Record),
+                          capacity * 2 * sizeof(Record), MREMAP_MAYMOVE);
+      if (next == MAP_FAILED) {
+        perror("grow request records");
+        std::exit(1);
+      }
+      data = static_cast<Record *>(next);
+      capacity *= 2;
+    }
+    data[size++] = value;
+  }
+  const Record *begin() const { return data; }
+  const Record *end() const { return data + size; }
 };
-using Range = pair<const char *, const char *>;
+struct Hour {
+  Rows rows;
+  vector<uint32_t> large;
+  // count = low byte + a multiple of 256; a wrap spills without losing
+  // requests.
+  uint8_t counts[KEYS]{};
+  unordered_map<uint16_t, uint32_t> count_overflow;
+};
 struct Worker {
-  vector<Range> ranges[HOURS];
+  Dictionary keys;
+  unique_ptr<Hour> hours[HOURS];
+  uint16_t global[KEYS]{};
 };
 static inline unsigned hour(const char *p) {
   unsigned h = (p[11] - '0') * 10 + p[12] - '0';
@@ -113,7 +158,7 @@ static inline uint32_t latency(const char *&p, const char *end, bool parse) {
   if (end - p >= 8) {
     uint64_t bytes;
     memcpy(&bytes, p, 8);
-    // SWAR zero-byte detection locates LF; its first marked byte is exact.
+    // Detect LF bytes, then reduce up to seven decimal digits with SWAR.
     uint64_t x = bytes ^ 0x0a0a0a0a0a0a0a0aULL;
     uint64_t stop = (x - 0x0101010101010101ULL) & ~x & 0x8080808080808080ULL;
     if (stop) {
@@ -195,6 +240,8 @@ int main() {
   vector<unique_ptr<Worker>> states;
   for (unsigned i = 0; i < workers; ++i)
     states.push_back(make_unique<Worker>());
+  Dictionary global;
+  vector<uint16_t> order;
   vector<Output> output(HOURS);
   atomic<unsigned> next_hour{0};
   barrier sync(workers);
@@ -202,101 +249,115 @@ int main() {
   for (unsigned w = 0; w < workers; ++w)
     threads.emplace_back([&, w] {
       Worker &local = *states[w];
-      const char *line = bounds[w], *scan = line, *finish = bounds[w + 1],
-                 *run = line;
-      unsigned previous = HOURS;
-      auto boundary = [&](const char *newline) {
-        unsigned h = hour(line);
-        if (h != previous) {
-          if (previous != HOURS)
-            local.ranges[previous].emplace_back(run, line);
-          previous = h;
-          run = line;
-        }
-        line = newline + 1;
-      };
-      // Discover all contiguous hour runs, even when hours arrive out of order.
-      while (finish - scan >= 32) {
-        __m256i bytes =
-            _mm256_loadu_si256(reinterpret_cast<const __m256i *>(scan));
-        unsigned mask = _mm256_movemask_epi8(
-            _mm256_cmpeq_epi8(bytes, _mm256_set1_epi8('\n')));
-        while (mask) {
-          unsigned bit = __builtin_ctz(mask);
-          boundary(scan + bit);
-          mask &= mask - 1;
-        }
-        scan += 32;
+      const char *p = bounds[w], *finish = bounds[w + 1];
+      while (p < finish) {
+        unsigned h = hour(p);
+        const char *ep = endpoint(p);
+        auto [len, hash] = key(ep, base + st.st_size);
+        uint16_t id = local.keys.intern(base, ep, len, hash);
+        p = ep + len + 1;
+        bool error = *p == '5';
+        p += 4;
+        uint32_t value = latency(p, base + st.st_size, true);
+        if (!local.hours[h])
+          local.hours[h] = make_unique<Hour>();
+        local.hours[h]->rows.push_back((uint32_t(id) << ID_SHIFT) |
+                                       (uint32_t(error) << VALUE_BITS) |
+                                       min(value, VALUE_MASK));
+        if (++local.hours[h]->counts[id] == 0)
+          local.hours[h]->count_overflow[id] += 256;
+        if (value >= VALUE_MASK)
+          local.hours[h]->large.push_back(value);
       }
-      while (scan < finish) {
-        if (*scan == '\n')
-          boundary(scan);
-        ++scan;
-      }
-      if (previous != HOURS)
-        local.ranges[previous].emplace_back(run, finish);
       sync.arrive_and_wait();
+      if (w == 0) {
+        for (auto &state : states)
+          for (const Entry &e : state->keys.names) {
+            uint16_t id =
+                global.intern(base, base + e.offset, e.length, e.hash);
+            state->global[e.id] = id;
+          }
+        for (const Entry &e : global.names)
+          order.push_back(e.id);
+        sort(order.begin(), order.end(), [&](uint16_t a, uint16_t b) {
+          const Entry &x = global.names[a], &y = global.names[b];
+          return string_view(base + x.offset, x.length) <
+                 string_view(base + y.offset, y.length);
+        });
+      }
+      sync.arrive_and_wait();
+      vector<uint32_t> combined;
+      uint32_t counts[KEYS], offsets[KEYS + 1], cursors[KEYS], errors[KEYS];
       for (;;) {
         unsigned h = next_hour.fetch_add(1, memory_order_relaxed);
         if (h >= HOURS)
           break;
-        Dictionary dict;
-        uint32_t counts[KEYS]{}, errors[KEYS]{}, offsets[KEYS + 1],
-            cursors[KEYS];
-        vector<Record> rows;
-        rows.reserve(65536);
-        for (auto &state : states)
-          for (const auto &[start, end] : state->ranges[h]) {
-            const char *p = start;
-            while (p < end) {
-              const char *ep = endpoint(p);
-              auto [len, hash] = key(ep, base + st.st_size);
-              uint16_t id = dict.intern(base, ep, len, hash);
-              p = ep + len + 1;
-              bool error = *p == '5';
-              p += 4;
-              uint32_t value = latency(p, base + st.st_size, true);
-              rows.push_back({value, id});
-              ++counts[id];
-              errors[id] += error;
-            }
-          }
-        offsets[0] = 0;
-        for (size_t i = 0; i < KEYS; ++i)
-          offsets[i + 1] = offsets[i] + counts[i];
-        copy(offsets, offsets + KEYS, cursors);
-        unique_ptr<uint32_t[]> values_by_group(new uint32_t[rows.size()]);
-        for (const Record &row : rows)
-          values_by_group[cursors[row.id]++] = row.value;
-        vector<uint16_t> order;
-        for (const Entry &e : dict.names)
-          order.push_back(e.id);
-        sort(order.begin(), order.end(), [&](uint16_t a, uint16_t b) {
-          const Entry &x = dict.names[a], &y = dict.names[b];
-          return string_view(base + x.offset, x.length) <
-                 string_view(base + y.offset, y.length);
-        });
         char timestamp[24];
         unsigned day = (h + SPAN_START_HOUR) / 24,
                  clock = (h + SPAN_START_HOUR) % 24;
         snprintf(timestamp, sizeof timestamp, "%04u-%02u-%02uT%02u:00:00Z",
                  SPAN_YEAR, SPAN_MONTHS[day], SPAN_DAYS[day], clock);
+        fill(begin(counts), end(counts), 0);
+        fill(begin(errors), end(errors), 0);
+        for (auto &state : states)
+          if (state->hours[h]) {
+            for (const Entry &e : state->keys.names)
+              counts[state->global[e.id]] += state->hours[h]->counts[e.id];
+            for (const auto &[id, extra] : state->hours[h]->count_overflow)
+              counts[state->global[id]] += extra;
+          }
+        offsets[0] = 0;
+        for (size_t i = 0; i < KEYS; ++i)
+          offsets[i + 1] = offsets[i] + counts[i];
+        copy(offsets, offsets + KEYS, cursors);
+        combined.resize(offsets[KEYS]);
+        vector<vector<uint32_t>> large(KEYS);
+        for (auto &state : states)
+          if (state->hours[h]) {
+            // Parse order preserves the one-to-one sentinel/overflow
+            // association.
+            size_t large_index = 0;
+            for (uint32_t row : state->hours[h]->rows) {
+              uint16_t id = state->global[row >> ID_SHIFT];
+              combined[cursors[id]++] = row & VALUE_MASK;
+              errors[id] += (row >> VALUE_BITS) & 1;
+              if ((row & VALUE_MASK) == VALUE_MASK)
+                large[id].push_back(state->hours[h]->large[large_index++]);
+            }
+            state->hours[h].reset();
+          }
         Output &buf = output[h];
-        buf.capacity = max(size_t(1), dict.names.size() * 224);
+        buf.capacity = max(size_t(1), global.names.size() * 224);
         buf.data = static_cast<char *>(
             mmap(nullptr, buf.capacity, PROT_READ | PROT_WRITE,
                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
         if (buf.data == MAP_FAILED) {
-          perror("output buffer mmap");
+          perror("allocate hour output");
           std::exit(1);
         }
         char *cursor = buf.data;
         for (uint16_t id : order) {
           uint32_t n = counts[id];
+          if (!n)
+            continue;
           uint64_t error = errors[id];
           uint32_t values[3];
-          percentiles(values_by_group.get() + offsets[id], n, values);
-          const Entry &e = dict.names[id];
+          percentiles(combined.data() + offsets[id], n, values);
+          size_t ranks[] = {(50 * size_t(n) + 99) / 100 - 1,
+                            (95 * size_t(n) + 99) / 100 - 1,
+                            (99 * size_t(n) + 99) / 100 - 1};
+          for (unsigned q = 0; q < 3; ++q) {
+            // All ordinary codes sort below the sentinel, so subtract their
+            // count.
+            if (values[q] == VALUE_MASK) {
+              auto &overflow = large[id];
+              size_t index = ranks[q] - (n - overflow.size());
+              nth_element(overflow.begin(), overflow.begin() + index,
+                          overflow.end());
+              values[q] = overflow[index];
+            }
+          }
+          const Entry &e = global.names[id];
           memcpy(cursor, timestamp, 20);
           cursor += 20;
           *cursor++ = ' ';

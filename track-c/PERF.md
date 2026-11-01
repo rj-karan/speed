@@ -19,6 +19,8 @@ Every step from the reference to your final version, each with the live-board ru
 | Rust trial, rejected | Same algorithm ported to Rust | `7b22df9` | run-8c76f3025bd6 | 0.053445 | 13.414 | 402 | 26.169341 | 70.889639 |
 | Rejected control-array trial | Higher official peak memory | `827cf69` | run-d0a43f0b43d1 | 0.051362 | 27.976 | 385 | 23.195208 | 68.269914 |
 
+| Rejected boundary-word trial | Slower official run | `fe49a2b` | run-889094220a34 | 0.054374 | 13.619 | 380 | 26.085609 | 70.820049 |
+
 Local `check.py` passed the official seed-1 full output hash
 `d8088b1cd42ba1338b1345b107b55db7b96ef1f5066f3ff64fd26a8912a0f536`.
 The local Docker check took 0.27 s including container startup; this is not a
@@ -240,3 +242,10 @@ peak exceeded the previous version. The cause of that peak difference has not
 been established from the public metrics. The metadata change is rejected.
 The follow-up isolates exact boundary-word reuse with the original atomic-hash
 publication/table layout; all three full additional seeds match their references.
+
+
+Official boundary-word-only trial `run-889094220a34` at `fe49a2b` passed all
+gates: T=0.054374 s, M=13,619,200 bytes, S=380, K=26.085609, 70.820049 points.
+This is below the 71.792660-point a3babda result. Both local experiments are
+rejected; main.cpp and README.md return byte-for-byte to a3babda. No unexplained
+scoring-host difference is presented as an improvement.

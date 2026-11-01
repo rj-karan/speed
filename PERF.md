@@ -6,23 +6,23 @@ commit, process time, decimal MB, canonical source S, coefficient K and points.
 Regressions and rejected prototypes are labelled separately. Unchanged code can
 vary between runs; repeated confirmations are not new algorithm improvements.
 
-## Last confirmed baseline before the current follow-up
+## Best confirmed machine results
 
-All gates passed at `9c8f98c`. These are machine points, before judging.
+These are historical bests before the current A trial, before judging. They
+come from different commits; each track log identifies the measured source.
 
-| Track | Run | T (s) | M (bytes) | S | K | Points |
-|---|---|---:|---:|---:|---:|---:|
-| A | run-24951b257cd0 | 0.046647 | 23,543,808 | 323 | 31.734877 | 75.076841 |
-| B | run-a8a26830f3fb | 0.646041 | 95,813,632 | 530 | 13.419566 | 56.386923 |
-| C | run-4dda2a32142b | 0.051579 | 13,193,216 | 377 | 26.985886 | 71.556834 |
-| D | run-3789c40c96ef | 0.620974 | 228,958,208 | 345 | 10.393619 | 50.838341 |
+| Track | Commit | Run | T (s) | M (bytes) | S | K | Points |
+|---|---|---|---:|---:|---:|---:|---:|
+| A | 9c8f98c | run-24951b257cd0 | 0.046647 | 23,543,808 | 323 | 31.734877 | 75.076841 |
+| B | a3babda | run-f7c72f2f389f | 0.627526 | 71,049,216 | 546 | 14.390926 | 57.904436 |
+| C | a3babda | run-ab1dcf6dda0c | 0.051316 | 12,656,640 | 377 | 27.280554 | 71.792660 |
+| D | 9c8f98c | run-3789c40c96ef | 0.620974 | 228,958,208 | 345 | 10.393619 | 50.838341 |
 
-The measured follow-up added smaller B postings and a rejected A static build.
-The next trial restores A's dynamic build and direct hour offsets, names A calendar
-constants, bounded B document-header scanning, diagnostic errors, algorithm and
-publication comments, and LLVM formatting. The C++ C binary stayed identical after formatting/comments; a direct Rust
-scoring-host trial now follows, with the C++ comparison preserved at a3babda. Performance changes require a fresh board
-confirmation; these baseline figures are not attributed to them.
+The current A candidate replaces the hour-discovery scan and six-byte records
+with single-pass four-byte records and exact overflow streams. Local results
+and invariants are recorded in its track log; official K decides retention.
+B and C use their exact a3babda main.cpp sources after rejected trials. D keeps
+the measured BFS-order/packed-state design with allocation diagnostics.
 
 ## Validation
 
@@ -44,8 +44,8 @@ not a formal race-freedom proof. The independent oracles also pass.
 
 The cached-hit B/control-metadata C trial at 827cf69 passed correctness but
 lost combined K: B 57.856675 and C 68.269914 points. B returns to the confirmed
-compact two-pass source. C's follow-up isolates exact boundary-word reuse with
-its previous table/publication layout. These selected B/C images were rechecked
+compact two-pass source. C's isolated boundary-word follow-up at fe49a2b also regressed to
+70.820049 points and is reverted to a3babda. These selected images were rechecked
 twenty times on each additional full seed; the validation record is refreshed.
 The direct Rust port's 70.889639-point trial is also recorded and rejected against
 the prior C++ result. The public board's historical best does not replace testing

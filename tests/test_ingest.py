@@ -38,7 +38,7 @@ class IngestCorrectness(unittest.TestCase):
         paths += ['/' + 'q' * n for n in [6, 7, 8, 14, 15, 16, 23, 24, 25, 30, 31, 32, 63, 64]]
         methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
         values = [0, 1, 9, 10, 99, 100, 999, 1000, 9999, 10000, 99999, 100000,
-                  999999, 1000000, 9999999, 10000000, 99999999, 100000000,
+                  999999, 1000000, 1048574, 1048575, 1048576, 9999999, 10000000, 99999999, 100000000,
                   999999999, 1000000000, 4294967295]
         groups = collections.defaultdict(lambda: [[], 0])
         lines = []
@@ -51,6 +51,20 @@ class IngestCorrectness(unittest.TestCase):
             repeat = 2 if i % 31 == 0 else 1
             lines.extend([row] * repeat)
             g = groups[(h, path)]; g[0].extend([latency] * repeat); g[1] += repeat * (status >= 500)
+        # Force percentile ranks inside both the ordinary and full-width tails.
+        tails = {
+            '/overflow-split': list(range(192)) + [1048575 + i for i in range(7)] + [4294967295],
+            '/overflow-half': list(range(10)) + [1048575 + i for i in range(10)],
+            '/overflow-all': [1048575, 1048576, 4294967295],
+            '/overflow-one': [4294967295],
+        }
+        for path, latencies in tails.items():
+            h = 23
+            timestamp = start + datetime.timedelta(hours=h)
+            for i, latency in enumerate(latencies):
+                status = 503 if i % 3 == 0 else 200
+                lines.append(f'{timestamp:%Y-%m-%dT%H:%M:%S}.000000Z GET {path} {status} {latency}\n')
+                g = groups[(h, path)]; g[0].append(latency); g[1] += status >= 500
         rng.shuffle(lines)
         expected = []
         for (h, path), (latencies, errors) in sorted(groups.items()):
