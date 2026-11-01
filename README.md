@@ -88,6 +88,25 @@ logical CPUs available locally. Repeated correct outputs test stability but do
 not prove the absence of races; independent oracles and publication invariants
 provide separate evidence.
 
+## Local process comparisons
+
+Compile the official harness timer statically outside the submitted tracks, then
+interleave built images with an exact expected output hash. Docker startup stays
+outside the process clock. Run benchmarks without concurrent builds or tests.
+
+```sh
+cc -O2 -static /path/to/speed-demon-2026/harness/timer/sd-timer.c -o .out/sd-timer
+python3 tools/benchmark.py b current=speeddemon-check/track-b \
+  --data data/b --timer .out/sd-timer --cpus 0-11 --repeats 5 \
+  --expected f86973c210228141bcb6f1f1b10188ad2a9b65f71e7cd7cf4590b38de4e80927 \
+  --save .out/b-process-comparison.json
+```
+
+Add more `label=image` arguments to compare candidates. The report records
+immutable images, input/timer hashes, every sample and trimmed means. Choose the
+six local physical cores and their SMT siblings with `--cpus`; the recorded Ryzen
+comparison uses `0-5,8-13`. Local timings do not substitute for official K.
+
 ## Next steps
 
 Prioritize B's exact index construction and storage; benchmark time, peak memory

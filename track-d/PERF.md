@@ -16,6 +16,8 @@ Every step from the reference to your final version, each with the live-board ru
 | 9 | Unchanged-source confirmation | `9c8f98c` | run-3789c40c96ef | 0.620974 | 228.958 | 345 | 10.393619 | 50.838341 |
 | Follow-up | Formatting and diagnostic clarification | `a3babda` | run-0161d035bc9d | 0.625906 | 229.290 | 347 | 10.340621 | 50.727332 |
 
+| Current-source confirmation | All official gates passed | `a9b5f40` | run-088db1629572 | 0.641023 | 230.470 | 347 | 10.207483 | 50.445933 |
+
 Local `check.py` passed the official seed-1 full output hash
 `a23dbdf0a3e49cc8901310a9ee1dc6a9a569a85297b6da75c2a7002cb2ed277e`.
 The local Docker check took 8.24 s including container startup; this is not a
@@ -129,3 +131,14 @@ the 53-bit distance bound would be rejected. No new algorithm gain is claimed.
 
 
 Official follow-up at `a3babda`: all gates passed. Formatting and diagnostic clarification.
+
+
+## Submitted state
+
+The source/build at `a9b5f40` is retained. Later documentation/tool-only commits
+do not change executable source or build settings. These are exact-run metrics, separate from the
+board's historical best; normal repeated-run variation is not a new algorithm.
+
+| Source commit | Official run | T (s) | M (bytes) | S | K | Points |
+|---|---|---:|---:|---:|---:|---:|
+| a9b5f40 | run-088db1629572 | 0.641023 | 230,469,632 | 347 | 10.207483 | 50.445933 |

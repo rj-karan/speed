@@ -21,6 +21,8 @@ Every step from the reference to your final version, each with the live-board ru
 | Follow-up | Confirmed compact worker-relative postings | `a3babda` | run-f7c72f2f389f | 0.627526 | 71.049 | 546 | 14.390926 | 57.904436 |
 | Rejected cached-hit trial | Time improved, combined K did not | `827cf69` | run-d03e8bd3275f | 0.533664 | 100.352 | 600 | 14.359308 | 57.856675 |
 
+| Accepted worker-major cache | All official gates passed | `a9b5f40` | run-2f033ee2f246 | 0.481606 | 92.770 | 639 | 15.210464 | 59.107124 |
+
 Local `check.py` passed the official seed-1 full output hash
 `f86973c210228141bcb6f1f1b10188ad2a9b65f71e7cd7cf4590b38de4e80927`.
 The local Docker check took 11.30 s including container startup; this is not a
@@ -276,3 +278,22 @@ independent oracles. Seeds 19, 37 and 59 each pass twenty full-scale sandbox
 runs against the official Python reference. The refreshed root validation record
 pins these images and source hashes. This establishes correctness/stability,
 not a machine-score improvement; the official trial follows.
+
+
+Official trial `run-2f033ee2f246` at `a9b5f40` passed every gate and is retained:
+0.481606 s, 92,770,304 bytes, S=639, K=15.210464, 59.107124 points. Against
+`a3babda` (0.627526 s, 71,049,216 bytes, S=546, K=14.390926), time improves
+23.3%, peak increases 30.6%, and combined K improves 5.7%. The net machine gain
+is 1.202688 points. This confirms a gain despite the remaining memory/source cost.
+The source and output do not depend on the public seed.
+
+
+## Submitted state
+
+The source/build at `a9b5f40` is retained. Later documentation/tool-only commits
+do not change executable source or build settings. These are exact-run metrics, separate from the
+board's historical best; normal repeated-run variation is not a new algorithm.
+
+| Source commit | Official run | T (s) | M (bytes) | S | K | Points |
+|---|---|---:|---:|---:|---:|---:|
+| a9b5f40 | run-2f033ee2f246 | 0.481606 | 92,770,304 | 639 | 15.210464 | 59.107124 |

@@ -1,0 +1,36 @@
+{
+  "kind": "local process timing, not official scoring",
+  "at_utc": "2026-11-01T03:56:42.838483+00:00",
+  "track": "b",
+  "cpus": "0-5,8-13",
+  "images": {
+    "previous": "sha256:ac6467f269249c5b4df59ce3c6b100b3bbc8ee78826da5fd98c8e986a1454d7a",
+    "candidate": "sha256:f17455bff7585944ece4a1f745322c63d7829e213e5a3839578be190e7ace66e"
+  },
+  "timer_sha256": "540461a1229d3649489389f20fbdec19ac065e0b60c3185d64c264a8e4347ad6",
+  "inputs_sha256": {
+    "docs.txt": "6cd461670d6c39f9c5211162577532d3648edeab12340c71cc7d2ab5f18e66c8",
+    "queries.txt": "77ef7ffc59afde051006b02a2ce8e4c090fbbfbf101acd6f862d0f8e298d39f9"
+  },
+  "expected_sha256": "f86973c210228141bcb6f1f1b10188ad2a9b65f71e7cd7cf4590b38de4e80927",
+  "samples_s": {
+    "previous": [
+      0.406318091,
+      0.407294341,
+      0.411769903,
+      0.413599059,
+      0.40704099
+    ],
+    "candidate": [
+      0.314490233,
+      0.331820839,
+      0.327909538,
+      0.311495979,
+      0.308008235
+    ]
+  },
+  "trimmed_mean_s": {
+    "previous": 0.40870174466666664,
+    "candidate": 0.31796525
+  }
+}

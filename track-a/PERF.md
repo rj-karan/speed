@@ -23,6 +23,8 @@ Every step from the reference to your final version, each with the live-board ru
 
 | Rejected four-byte single-pass trial | Lower memory but slower official run | `77939f3` | run-ffd51b52e53d | 0.062165 | 21.742 | 379 | 27.269512 | 71.783869 |
 
+| Current-source confirmation | All official gates passed | `a9b5f40` | run-23b104035992 | 0.046786 | 23.699 | 323 | 31.645968 | 75.015919 |
+
 Local `check.py` passed the official seed-1 full output hash
 `495ca09682b9673ef836a506496177680bb4a3af54255174befddb1f83481cd3`.
 The local Docker check took 0.24 s including container startup; this is not a
@@ -190,3 +192,14 @@ executable statements/build remain the confirmed 9c8f98c version.
 
 The formatted/commented A restoration builds the identical runtime image as the
 validated restoration (sha256:d4da1a146a3c prefix); the full public hash passes.
+
+
+## Submitted state
+
+The source/build at `a9b5f40` is retained. Later documentation/tool-only commits
+do not change executable source or build settings. These are exact-run metrics, separate from the
+board's historical best; normal repeated-run variation is not a new algorithm.
+
+| Source commit | Official run | T (s) | M (bytes) | S | K | Points |
+|---|---|---:|---:|---:|---:|---:|
+| a9b5f40 | run-23b104035992 | 0.046786 | 23,699,456 | 323 | 31.645968 | 75.015919 |

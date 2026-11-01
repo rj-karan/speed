@@ -21,6 +21,8 @@ Every step from the reference to your final version, each with the live-board ru
 
 | Rejected boundary-word trial | Slower official run | `fe49a2b` | run-889094220a34 | 0.054374 | 13.619 | 380 | 26.085609 | 70.820049 |
 
+| Current-source confirmation | All official gates passed | `a9b5f40` | run-d8f953cf754b | 0.052086 | 13.124 | 377 | 26.882663 | 71.473614 |
+
 Local `check.py` passed the official seed-1 full output hash
 `d8088b1cd42ba1338b1345b107b55db7b96ef1f5066f3ff64fd26a8912a0f536`.
 The local Docker check took 0.27 s including container startup; this is not a
@@ -249,3 +251,14 @@ gates: T=0.054374 s, M=13,619,200 bytes, S=380, K=26.085609, 70.820049 points.
 This is below the 71.792660-point a3babda result. Both local experiments are
 rejected; main.cpp and README.md return byte-for-byte to a3babda. No unexplained
 scoring-host difference is presented as an improvement.
+
+
+## Submitted state
+
+The source/build at `a9b5f40` is retained. Later documentation/tool-only commits
+do not change executable source or build settings. These are exact-run metrics, separate from the
+board's historical best; normal repeated-run variation is not a new algorithm.
+
+| Source commit | Official run | T (s) | M (bytes) | S | K | Points |
+|---|---|---:|---:|---:|---:|---:|
+| a9b5f40 | run-d8f953cf754b | 0.052086 | 13,123,584 | 377 | 26.882663 | 71.473614 |

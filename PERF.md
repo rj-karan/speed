@@ -14,14 +14,14 @@ come from different commits; each track log identifies the measured source.
 | Track | Commit | Run | T (s) | M (bytes) | S | K | Points |
 |---|---|---|---:|---:|---:|---:|---:|
 | A | 9c8f98c | run-24951b257cd0 | 0.046647 | 23,543,808 | 323 | 31.734877 | 75.076841 |
-| B | a3babda | run-f7c72f2f389f | 0.627526 | 71,049,216 | 546 | 14.390926 | 57.904436 |
+| B | a9b5f40 | run-2f033ee2f246 | 0.481606 | 92,770,304 | 639 | 15.210464 | 59.107124 |
 | C | a3babda | run-ab1dcf6dda0c | 0.051316 | 12,656,640 | 377 | 27.280554 | 71.792660 |
 | D | 9c8f98c | run-3789c40c96ef | 0.620974 | 228,958,208 | 345 | 10.393619 | 50.838341 |
 
 The four-byte A trial at 77939f3 passed all gates but regressed to 71.783869
 points (0.062165 s, 21,741,568 bytes, S=379). It is rejected. A returns to its
 9c8f98c executable statements/build (LLVM formatting and comments only);
-C uses its a3babda main.cpp source. B now trials a mapped cache with worker-major
+C uses its a3babda main.cpp source. B retains the officially improved mapped cache with worker-major
 final sparse segments, following phase-memory measurements recorded in its log. D keeps the measured BFS-order/packed-state design with
 diagnostics. Local improvements are never substituted for scoring-host results.
 
@@ -63,3 +63,21 @@ experiments are separate from official scoring-host measurements.
 B remains the weakest counted track. Improving D alone does not raise the overall
 machine score while it remains below B. The final result also includes judging;
 comments and clean evidence support review but do not guarantee judging points.
+
+
+## Submitted-state confirmation
+
+All four tracks at `a9b5f40` passed all official gates. B gains 1.202688 machine
+points over its previous best. Its 23.3% time reduction outweighs higher memory
+and source cost. The board's best-per-track geometric mean moves from 67.832 to
+68.298; the single exact-commit run's best-three mean is 68.178. This does not
+establish a top-three result. A/C regressions were rejected and their confirmed
+algorithms restored. D remains the weakest excluded track.
+
+Each track log ends with its source commit/run/T/M/S/K. The
+[official snapshot](validation/official-latest.json) records the measured results
+and historical bests. [Local B comparison](validation/b-local-comparison.json)
+pins both images, timer, input hashes and raw interleaved samples. Reproduce local
+comparisons with [tools/benchmark.py](tools/benchmark.py), as described in README.
+Comments/LLVM formatting on restored A produce the identical runtime image and
+canonical S=323. Documentation/tool-only follow-ups change no submitted source.
